@@ -786,6 +786,11 @@ def dispatch_command(cmd: str) -> None:
             nodes_returned=len(connections),
         )
 
+    elif cmd == "jarvis":
+        from graphify.jarvis import run as _jarvis_run
+
+        sys.exit(_jarvis_run(sys.argv[2:]))
+
     elif cmd == "diagnose":
         subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
         if subcmd != "multigraph":

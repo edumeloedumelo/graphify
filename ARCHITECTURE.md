@@ -29,6 +29,7 @@ Each stage is a single function in its own module. They communicate through plai
 | `serve.py` | `start_server(graph_path)` | graph file path → MCP stdio server |
 | `watch.py` | `watch(root, flag_path)` | directory → writes flag file on change |
 | `benchmark.py` | `run_benchmark(graph_path)` | graph file → corpus vs subgraph token comparison |
+| `jarvis.py` | `run(argv)` / `Jarvis.answer(text)` | plain-language request → routed graph answer (explain/path/affected/query) |
 
 ## Extraction output schema
 
