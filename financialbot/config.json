@@ -1,0 +1,11 @@
+{
+  "procedureValues": [
+    { "procedure": "Colecistectomia", "value": 2800 },
+    { "procedure": "Mamoplastia", "value": 4200 },
+    { "procedure": "Apendicectomia", "value": 3500 },
+    { "procedure": "Abdominoplastia", "value": 5000 },
+    { "procedure": "Rinoplastia", "value": 3800 }
+  ],
+  "defaultValue": null,
+  "extraPrompt": ""
+}
