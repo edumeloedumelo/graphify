@@ -1,23 +1,51 @@
 # Financial Bot Control
 
-Bot de WhatsApp para controle financeiro de anestesiologia. Recebe mensagens via
-UltraMsg, usa Claude (Anthropic API) para extrair dados estruturados de
-procedimentos cirúrgicos e atualiza automaticamente uma planilha Google Sheets
-com o fluxo de caixa mensal.
-
-Os valores dos procedimentos são pré-configurados pelo admin e inseridos na
-planilha automaticamente — **nunca aparecem nas respostas do WhatsApp**.
+Bot de WhatsApp para controle financeiro de anestesiologia — fluxo da secretária.
+Ela envia no grupo: **paciente, data, valor e situação do pagamento** (pago 100%,
+glosa do convênio ou pendente). O bot usa Claude (Anthropic API) para extrair os
+dados e atualiza automaticamente uma planilha Google Sheets onde **cada paciente
+tem seu próprio controle**.
 
 ## Como funciona
 
-1. Toda mensagem do grupo que não começa com `/` passa por `isMedicalRecord()`.
-2. Se parecer um registro (≥2 sinais entre médico, hospital, procedimento e data),
-   o Claude extrai os campos estruturados.
-3. O valor é buscado internamente em `config.json` pelo nome do procedimento
-   (correspondência exata → parcial → valor padrão → em branco).
-4. O registro entra na aba `Registros`; as abas `Resumo_Mensal` e `MM_YYYY`
-   são recalculadas. Abas são criadas automaticamente se não existirem.
-5. Se faltar campo obrigatório, o bot pergunta apenas o que falta.
+1. Toda mensagem do grupo que não começa com `/` passa por `isFinancialRecord()`
+   (≥2 sinais entre paciente, valor, data e termo de pagamento).
+2. O Claude extrai os campos estruturados: paciente, data, valor, status de
+   pagamento (`pago` / `glosado` / `pendente`), valor pago, glosa, procedimento,
+   convênio e observações.
+3. Em glosas, informando só o valor recebido OU só o valor glosado, o bot
+   calcula a diferença automaticamente.
+4. Mensagens do tipo **"caiu o pagamento da Maria"** são entendidas como
+   *atualização*: o bot localiza o registro em aberto mais recente do paciente
+   e atualiza a situação na planilha.
+5. Se faltar campo obrigatório (paciente, data ou valor), o bot pergunta apenas
+   o que falta.
+
+Exemplos de mensagens reconhecidas:
+
+```
+Maria Silva - 15/07 - R$3.000 - pago 100%
+Paciente João Souza, ontem, 2.850, convênio glosou R$400
+Ana Pereira / Unimed / hoje / 3200 / pendente
+Caiu o pagamento da Maria Silva
+```
+
+## Estrutura da planilha
+
+| Aba | Conteúdo |
+|---|---|
+| `Registros` | Dados brutos: Data, Paciente, Procedimento, Convênio, Valor, Valor Pago, Glosa, Status, Observações, Registrado_em, ID |
+| `Resumo_Mensal` | Por mês: nº de registros, faturado, recebido, glosas, pendente |
+| `Pacientes` | Visão geral: uma linha por paciente com totais e saldo pendente |
+| `[Nome do Paciente]` | Aba individual criada automaticamente: histórico completo + linha TOTAL |
+
+Todas as abas são criadas automaticamente e recalculadas a cada registro.
+
+## Comandos
+
+**Consulta:** `/relatorio`, `/mes MM/YYYY`, `/paciente [nome]`, `/pendentes`, `/status`, `/ajuda`
+
+**Admin:** `/setprompt [texto]`, `/limparprompt`, `/resetar`
 
 ## Variáveis de ambiente (Railway)
 
@@ -54,16 +82,8 @@ planilha automaticamente — **nunca aparecem nas respostas do WhatsApp**.
 
 ## Teste
 
-1. Envie no grupo: `Dr. Carlos - Hospital X - Colecistectomia - Dr. Pedro - hoje`
-2. Verifique a linha na aba `Registros`
-3. Cadastre um valor: `/setvalor Colecistectomia; 2800`
-4. Registre outro procedimento e confira o valor preenchido na planilha
-5. Rode `/relatorio` — o WhatsApp mostra apenas contagens, sem valores
-
-## Comandos
-
-**Consulta:** `/relatorio`, `/mes MM/YYYY`, `/anestesista [nome]`, `/status`, `/ajuda`
-
-**Admin (valores):** `/setvalor Proc; 2800`, `/delvalor Proc`, `/valores`, `/setvalorpadrao 1500`
-
-**Admin (geral):** `/setprompt [texto]`, `/limparprompt`, `/resetar`
+1. Envie no grupo: `Maria Silva - hoje - R$3.000 - pendente`
+2. Verifique a linha na aba `Registros` e a aba individual `Maria Silva`
+3. Envie: `convênio pagou a Maria Silva com glosa de R$400`
+4. Confira a atualização (recebido R$2.600, glosa R$400) na planilha
+5. Rode `/relatorio` e `/pendentes`

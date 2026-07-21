@@ -1,16 +1,21 @@
-// sheets.js — Google Sheets API v4: leitura e escrita da planilha financeira.
-// Abas: "Registros" (dados brutos), "Resumo_Mensal" (pivô mês × anestesista),
-// "MM_YYYY" (detalhe mensal, criada sob demanda).
+// sheets.js — Google Sheets API v4: controle financeiro por paciente.
+// Abas: "Registros" (dados brutos), "Resumo_Mensal" (totais por mês),
+// "Pacientes" (visão geral, uma linha por paciente) e uma aba individual
+// por paciente com todo o histórico + totais (criadas automaticamente).
 
 import { google } from 'googleapis';
 import { setLastSync } from './state.js';
+import { formatBRL } from './format.js';
 
 const REGISTROS_SHEET = 'Registros';
 const RESUMO_SHEET = 'Resumo_Mensal';
+const PACIENTES_SHEET = 'Pacientes';
 const REGISTROS_HEADERS = [
-  'Data', 'Anestesista', 'Hospital', 'Procedimento', 'Cirurgião',
-  'Valor (R$)', 'Status', 'Registrado_em', 'ID',
+  'Data', 'Paciente', 'Procedimento', 'Convênio', 'Valor (R$)',
+  'Valor Pago (R$)', 'Glosa (R$)', 'Status', 'Observações', 'Registrado_em', 'ID',
 ];
+
+const STATUS_LABEL = { pago: 'Pago 100%', glosado: 'Glosado', pendente: 'Pendente' };
 
 let sheetsClient = null;
 
@@ -57,15 +62,16 @@ async function ensureSheet(api, title, headers) {
   return true;
 }
 
-export function formatBRL(value) {
-  if (value === null || value === undefined || value === '') return '';
-  const n = Number(value);
-  if (Number.isNaN(n)) return '';
-  return `R$${n.toLocaleString('pt-BR')}`;
+export function normalizeName(s) {
+  return String(s).toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, ' ').trim();
+}
+
+// Título de aba válido para o Sheets (sem []:*?/\ e ≤ 80 chars)
+function patientSheetTitle(paciente) {
+  return String(paciente).replace(/[[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
 }
 
 function monthKeyFromDate(dataBR) {
-  // "15/07/2025" -> "07/2025"
   const m = String(dataBR).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (!m) return null;
   return `${m[2].padStart(2, '0')}/${m[3]}`;
@@ -84,28 +90,38 @@ export async function getRegistros() {
   await ensureSheet(api, REGISTROS_SHEET, REGISTROS_HEADERS);
   const res = await api.spreadsheets.values.get({
     spreadsheetId: spreadsheetId(),
-    range: `'${REGISTROS_SHEET}'!A2:I`,
+    range: `'${REGISTROS_SHEET}'!A2:K`,
   });
   const rows = res.data.values || [];
   return rows
-    .filter((r) => r[0])
-    .map((r) => ({
+    .map((r, i) => ({ r, rowNumber: i + 2 }))
+    .filter(({ r }) => r[0] || r[1])
+    .map(({ r, rowNumber }) => ({
+      rowNumber,
       data: r[0] || '',
-      anestesista: r[1] || '',
-      hospital: r[2] || '',
-      procedimento: r[3] || '',
-      cirurgiao: r[4] || '',
-      valor: r[5] || '',
-      status: r[6] || '',
-      registradoEm: r[7] || '',
-      id: r[8] || '',
+      paciente: r[1] || '',
+      procedimento: r[2] || '',
+      convenio: r[3] || '',
+      valor: Number(r[4]) || 0,
+      valorPago: Number(r[5]) || 0,
+      glosa: Number(r[6]) || 0,
+      status: r[7] || 'pendente',
+      observacoes: r[8] || '',
+      registradoEm: r[9] || '',
+      id: r[10] || '',
       mes: monthKeyFromDate(r[0]),
     }));
 }
 
 export async function getRegistrosDoMes(mesKey) {
   const all = await getRegistros();
-  return all.filter((r) => r.mes === mesKey && r.status !== 'cancelado');
+  return all.filter((r) => r.mes === mesKey);
+}
+
+export async function getRegistrosDoPaciente(nome) {
+  const all = await getRegistros();
+  const alvo = normalizeName(nome);
+  return all.filter((r) => normalizeName(r.paciente).includes(alvo));
 }
 
 // ---- escrita ----
@@ -115,62 +131,100 @@ export async function appendRegistro(registro) {
   await ensureSheet(api, REGISTROS_SHEET, REGISTROS_HEADERS);
   const row = [
     registro.data,
-    registro.anestesista,
-    registro.hospital,
-    registro.procedimento,
-    registro.cirurgiao,
-    registro.valor === null || registro.valor === undefined ? '' : registro.valor,
+    registro.paciente,
+    registro.procedimento || '',
+    registro.convenio || '',
+    registro.valor ?? '',
+    registro.valorPago ?? '',
+    registro.glosa ?? '',
     registro.status,
+    registro.observacoes || '',
     new Date().toISOString(),
     registro.id,
   ];
   await api.spreadsheets.values.append({
     spreadsheetId: spreadsheetId(),
-    range: `'${REGISTROS_SHEET}'!A:I`,
+    range: `'${REGISTROS_SHEET}'!A:K`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [row] },
   });
-  console.log(`[sheets] registro ${registro.id} inserido na aba Registros`);
+  console.log(`[sheets] registro ${registro.id} inserido (${registro.paciente})`);
 
-  const mesKey = monthKeyFromDate(registro.data);
-  if (mesKey) {
-    await updateResumoMensal(api);
-    await updateMonthlySheet(api, mesKey);
-  }
+  await rebuildDerivedSheets(api, registro.paciente);
   setLastSync();
 }
 
-// Resumo_Mensal: linhas = meses (MM/YYYY), colunas = anestesistas + TOTAL.
-// Recalculado do zero a cada registro a partir da aba Registros.
-async function updateResumoMensal(api) {
-  const registros = (await getRegistros()).filter((r) => r.status !== 'cancelado');
-  const anesthetists = [...new Set(registros.map((r) => r.anestesista).filter(Boolean))].sort();
+// Atualiza o pagamento do registro mais recente ainda não quitado do paciente.
+// Retorna o registro atualizado, ou null se nada foi encontrado.
+export async function updatePagamento(paciente, { status, valorPago, glosa, observacoes }) {
+  const api = await getClient();
+  const registros = await getRegistrosDoPaciente(paciente);
+  if (!registros.length) return null;
+
+  // preferimos o registro em aberto mais recente; se todos quitados, o mais recente
+  const abertos = registros.filter((r) => r.status !== 'pago');
+  const alvo = (abertos.length ? abertos : registros)
+    .sort((a, b) => dateSortKey(b.data) - dateSortKey(a.data))[0];
+
+  const novoStatus = status || alvo.status;
+  let novoPago = valorPago ?? alvo.valorPago;
+  let novaGlosa = glosa ?? alvo.glosa;
+  if (novoStatus === 'pago' && valorPago === null) novoPago = alvo.valor;
+  if (novoStatus === 'glosado' && alvo.valor) {
+    if (valorPago === null && glosa !== null) novoPago = Math.max(alvo.valor - glosa, 0);
+    if (glosa === null && valorPago !== null) novaGlosa = Math.max(alvo.valor - valorPago, 0);
+  }
+  const novasObs = observacoes
+    ? (alvo.observacoes ? `${alvo.observacoes} | ${observacoes}` : observacoes)
+    : alvo.observacoes;
+
+  await api.spreadsheets.values.update({
+    spreadsheetId: spreadsheetId(),
+    range: `'${REGISTROS_SHEET}'!F${alvo.rowNumber}:I${alvo.rowNumber}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[novoPago, novaGlosa, novoStatus, novasObs]] },
+  });
+  console.log(`[sheets] pagamento atualizado: ${alvo.paciente} ${alvo.data} → ${novoStatus}`);
+
+  await rebuildDerivedSheets(api, alvo.paciente);
+  setLastSync();
+  return { ...alvo, status: novoStatus, valorPago: novoPago, glosa: novaGlosa };
+}
+
+// ---- abas derivadas (recalculadas do zero a partir de Registros) ----
+
+async function rebuildDerivedSheets(api, pacienteAlterado) {
+  const registros = await getRegistros();
+  await updateResumoMensal(api, registros);
+  await updatePacientesOverview(api, registros);
+  if (pacienteAlterado) await updatePatientSheet(api, registros, pacienteAlterado);
+}
+
+function pendenteDe(r) {
+  // saldo em aberto: pendente = valor - pago - glosa (glosa é perda reconhecida)
+  return Math.max(r.valor - r.valorPago - r.glosa, 0);
+}
+
+async function updateResumoMensal(api, registros) {
   const months = [...new Set(registros.map((r) => r.mes).filter(Boolean))]
     .sort((a, b) => {
       const [ma, ya] = a.split('/').map(Number);
       const [mb, yb] = b.split('/').map(Number);
-      return yb * 100 + mb - (ya * 100 + ma); // mais recente primeiro
+      return yb * 100 + mb - (ya * 100 + ma);
     });
 
-  const header = ['Mês', ...anesthetists, 'TOTAL'];
+  const header = ['Mês', 'Registros', 'Faturado', 'Recebido', 'Glosas', 'Pendente'];
   const rows = months.map((mes) => {
     const doMes = registros.filter((r) => r.mes === mes);
-    let total = 0;
-    const cells = anesthetists.map((a) => {
-      const sum = doMes
-        .filter((r) => r.anestesista === a)
-        .reduce((acc, r) => acc + (Number(r.valor) || 0), 0);
-      total += sum;
-      return sum ? formatBRL(sum) : '';
-    });
-    return [mes, ...cells, formatBRL(total)];
+    const faturado = doMes.reduce((a, r) => a + r.valor, 0);
+    const recebido = doMes.reduce((a, r) => a + r.valorPago, 0);
+    const glosas = doMes.reduce((a, r) => a + r.glosa, 0);
+    const pendente = doMes.reduce((a, r) => a + pendenteDe(r), 0);
+    return [mes, doMes.length, formatBRL(faturado), formatBRL(recebido), formatBRL(glosas), formatBRL(pendente)];
   });
 
   await ensureSheet(api, RESUMO_SHEET);
-  await api.spreadsheets.values.clear({
-    spreadsheetId: spreadsheetId(),
-    range: `'${RESUMO_SHEET}'!A:Z`,
-  });
+  await api.spreadsheets.values.clear({ spreadsheetId: spreadsheetId(), range: `'${RESUMO_SHEET}'!A:Z` });
   await api.spreadsheets.values.update({
     spreadsheetId: spreadsheetId(),
     range: `'${RESUMO_SHEET}'!A1`,
@@ -180,39 +234,71 @@ async function updateResumoMensal(api) {
   console.log('[sheets] Resumo_Mensal atualizado');
 }
 
-// Aba mensal "MM_YYYY": todos os procedimentos do mês em ordem cronológica
-// + linha TOTAL com o total por anestesista e o total geral.
-async function updateMonthlySheet(api, mesKey) {
-  const title = mesKey.replace('/', '_'); // "07/2025" -> "07_2025"
-  const registros = (await getRegistros())
-    .filter((r) => r.mes === mesKey && r.status !== 'cancelado')
-    .sort((a, b) => dateSortKey(a.data) - dateSortKey(b.data));
+// Visão geral: uma linha por paciente com os totais.
+async function updatePacientesOverview(api, registros) {
+  const byPatient = new Map();
+  for (const r of registros) {
+    const key = normalizeName(r.paciente);
+    if (!byPatient.has(key)) byPatient.set(key, { nome: r.paciente, regs: [] });
+    byPatient.get(key).regs.push(r);
+  }
 
-  const header = ['Data', 'Anestesista', 'Hospital', 'Procedimento', 'Cirurgião', 'Valor'];
-  const rows = registros.map((r) => [
-    r.data, r.anestesista, r.hospital, r.procedimento, r.cirurgiao, formatBRL(r.valor),
+  const header = ['Paciente', 'Registros', 'Faturado', 'Recebido', 'Glosas', 'Pendente', 'Último atendimento'];
+  const rows = [...byPatient.values()]
+    .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+    .map(({ nome, regs }) => {
+      const faturado = regs.reduce((a, r) => a + r.valor, 0);
+      const recebido = regs.reduce((a, r) => a + r.valorPago, 0);
+      const glosas = regs.reduce((a, r) => a + r.glosa, 0);
+      const pendente = regs.reduce((a, r) => a + pendenteDe(r), 0);
+      const ultimo = regs.map((r) => r.data).sort((a, b) => dateSortKey(b) - dateSortKey(a))[0] || '';
+      return [nome, regs.length, formatBRL(faturado), formatBRL(recebido), formatBRL(glosas), formatBRL(pendente), ultimo];
+    });
+
+  await ensureSheet(api, PACIENTES_SHEET);
+  await api.spreadsheets.values.clear({ spreadsheetId: spreadsheetId(), range: `'${PACIENTES_SHEET}'!A:Z` });
+  await api.spreadsheets.values.update({
+    spreadsheetId: spreadsheetId(),
+    range: `'${PACIENTES_SHEET}'!A1`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [header, ...rows] },
+  });
+  console.log('[sheets] Pacientes (visão geral) atualizado');
+}
+
+// Aba individual do paciente: histórico completo + linha de totais.
+async function updatePatientSheet(api, registros, paciente) {
+  const key = normalizeName(paciente);
+  const doPaciente = registros
+    .filter((r) => normalizeName(r.paciente) === key)
+    .sort((a, b) => dateSortKey(a.data) - dateSortKey(b.data));
+  if (!doPaciente.length) return;
+
+  const displayName = doPaciente[0].paciente;
+  const title = patientSheetTitle(displayName);
+
+  const header = ['Data', 'Procedimento', 'Convênio', 'Valor', 'Valor Pago', 'Glosa', 'Status', 'Observações'];
+  const rows = doPaciente.map((r) => [
+    r.data, r.procedimento, r.convenio, formatBRL(r.valor), formatBRL(r.valorPago),
+    formatBRL(r.glosa), STATUS_LABEL[r.status] || r.status, r.observacoes,
   ]);
 
-  const totals = {};
-  let geral = 0;
-  for (const r of registros) {
-    const v = Number(r.valor) || 0;
-    totals[r.anestesista] = (totals[r.anestesista] || 0) + v;
-    geral += v;
-  }
-  const totalCells = Object.entries(totals).map(([a, v]) => `${a}: ${formatBRL(v)}`);
-  const totalRow = ['TOTAL', ...totalCells, `GERAL: ${formatBRL(geral)}`];
+  const faturado = doPaciente.reduce((a, r) => a + r.valor, 0);
+  const recebido = doPaciente.reduce((a, r) => a + r.valorPago, 0);
+  const glosas = doPaciente.reduce((a, r) => a + r.glosa, 0);
+  const pendente = doPaciente.reduce((a, r) => a + pendenteDe(r), 0);
+  const totalRow = [
+    'TOTAL', '', '', formatBRL(faturado), formatBRL(recebido), formatBRL(glosas),
+    pendente > 0 ? `Pendente: ${formatBRL(pendente)}` : 'Quitado', '',
+  ];
 
   await ensureSheet(api, title);
-  await api.spreadsheets.values.clear({
-    spreadsheetId: spreadsheetId(),
-    range: `'${title}'!A:Z`,
-  });
+  await api.spreadsheets.values.clear({ spreadsheetId: spreadsheetId(), range: `'${title}'!A:Z` });
   await api.spreadsheets.values.update({
     spreadsheetId: spreadsheetId(),
     range: `'${title}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: [header, ...rows, totalRow] },
   });
-  console.log(`[sheets] aba mensal ${title} atualizada (${registros.length} registros)`);
+  console.log(`[sheets] aba do paciente "${title}" atualizada (${doPaciente.length} registros)`);
 }

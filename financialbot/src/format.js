@@ -1,5 +1,6 @@
 // format.js — formatação de mensagens para WhatsApp.
-// REGRA DE OURO: nenhuma função aqui inclui valores monetários.
+// Neste fluxo (grupo da secretária) os valores APARECEM nas respostas —
+// é a própria secretária quem os informa.
 
 const MONTH_NAMES = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -8,24 +9,57 @@ const MONTH_NAMES = [
 
 const DIVIDER = '━━━━━━━━━━━━━━';
 
+export const STATUS_EMOJI = { pago: '✅', glosado: '✂️', pendente: '⏳' };
+export const STATUS_TEXT = { pago: 'Pago 100%', glosado: 'Glosado', pendente: 'Pendente' };
+
+export function formatBRL(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const n = Number(value);
+  if (Number.isNaN(n)) return '';
+  const opts = Number.isInteger(n) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  return `R$${n.toLocaleString('pt-BR', opts)}`;
+}
+
 export function monthLabel(mesKey) {
-  // "07/2025" -> "Julho/2025"
   const [m, y] = mesKey.split('/');
   return `${MONTH_NAMES[Number(m) - 1]}/${y}`;
 }
 
-function doctorEmoji(name) {
-  return /^dra\b/i.test(String(name).trim()) ? '👩‍⚕️' : '👨‍⚕️';
+function shortDate(dataBR) {
+  const m = String(dataBR).match(/^(\d{1,2}\/\d{1,2})/);
+  return m ? m[1] : dataBR;
+}
+
+function statusLine(r) {
+  const emoji = STATUS_EMOJI[r.status] || '';
+  const text = STATUS_TEXT[r.status] || r.status;
+  if (r.status === 'glosado') {
+    return `${emoji} ${text} (recebido ${formatBRL(r.valorPago)}, glosa ${formatBRL(r.glosa)})`;
+  }
+  return `${emoji} ${text}`;
 }
 
 export function formatRegistroConfirmado(r) {
+  const lines = [
+    '✅ *Registro salvo*',
+    `🧑 Paciente: ${r.paciente}`,
+  ];
+  if (r.procedimento) lines.push(`🔪 Procedimento: ${r.procedimento}`);
+  if (r.convenio) lines.push(`🏥 Convênio: ${r.convenio}`);
+  lines.push(`📅 Data: ${r.data}`);
+  lines.push(`💰 Valor: ${formatBRL(r.valor)}`);
+  lines.push(`💳 Situação: ${statusLine(r)}`);
+  if (r.observacoes) lines.push(`📝 Obs: ${r.observacoes}`);
+  return lines.join('\n');
+}
+
+export function formatPagamentoAtualizado(r) {
   return [
-    '✅ *Procedimento registrado*',
-    `${doctorEmoji(r.anestesista)} Anestesista: ${r.anestesista}`,
-    `🏥 Hospital: ${r.hospital}`,
-    `🔪 Procedimento: ${r.procedimento}`,
-    `${doctorEmoji(r.cirurgiao)} Cirurgião: ${r.cirurgiao}`,
-    `📅 Data: ${r.data}`,
+    '🔄 *Pagamento atualizado*',
+    `🧑 Paciente: ${r.paciente}`,
+    `📅 Atendimento: ${r.data}${r.procedimento ? ` – ${r.procedimento}` : ''}`,
+    `💰 Valor: ${formatBRL(r.valor)}`,
+    `💳 Situação: ${statusLine(r)}`,
   ].join('\n');
 }
 
@@ -39,61 +73,90 @@ export function formatCamposFaltando(missing) {
   ].join('\n');
 }
 
-function shortDate(dataBR) {
-  // "15/07/2025" -> "15/07"
-  const m = String(dataBR).match(/^(\d{1,2}\/\d{1,2})/);
-  return m ? m[1] : dataBR;
+function totalsBlock(registros) {
+  const faturado = registros.reduce((a, r) => a + (r.valor || 0), 0);
+  const recebido = registros.reduce((a, r) => a + (r.valorPago || 0), 0);
+  const glosas = registros.reduce((a, r) => a + (r.glosa || 0), 0);
+  const pendente = registros.reduce((a, r) => a + Math.max((r.valor || 0) - (r.valorPago || 0) - (r.glosa || 0), 0), 0);
+  return [
+    `💰 Faturado: *${formatBRL(faturado)}*`,
+    `✅ Recebido: *${formatBRL(recebido)}*`,
+    `✂️ Glosas: *${formatBRL(glosas)}*`,
+    `⏳ Pendente: *${formatBRL(pendente)}*`,
+  ].join('\n');
 }
 
-// Relatório mensal — SOMENTE contagens e datas, sem valores.
+// Relatório mensal: totais + detalhe por paciente.
 export function formatRelatorio(mesKey, registros) {
   const lines = [
     '🏦 *FINANCIAL BOT CONTROL*',
     DIVIDER,
-    `📅 *${monthLabel(mesKey)}* — ${registros.length} procedimento${registros.length === 1 ? '' : 's'}`,
+    `📅 *${monthLabel(mesKey)}* — ${registros.length} registro${registros.length === 1 ? '' : 's'}`,
     DIVIDER,
   ];
 
   if (!registros.length) {
-    lines.push('_Nenhum procedimento registrado neste mês._');
+    lines.push('_Nenhum registro neste mês._');
     return lines.join('\n');
   }
 
-  const byAnesthetist = new Map();
-  for (const r of registros) {
-    if (!byAnesthetist.has(r.anestesista)) byAnesthetist.set(r.anestesista, []);
-    byAnesthetist.get(r.anestesista).push(r);
-  }
-  const sorted = [...byAnesthetist.entries()].sort((a, b) => b[1].length - a[1].length);
+  lines.push(totalsBlock(registros));
+  lines.push(DIVIDER);
 
-  for (const [anestesista, regs] of sorted) {
-    lines.push(`${doctorEmoji(anestesista)} *${anestesista}* — ${regs.length} procedimento${regs.length === 1 ? '' : 's'}`);
+  const byPatient = new Map();
+  for (const r of registros) {
+    const key = r.paciente;
+    if (!byPatient.has(key)) byPatient.set(key, []);
+    byPatient.get(key).push(r);
+  }
+
+  for (const [paciente, regs] of [...byPatient.entries()].sort((a, b) => a[0].localeCompare(b[0], 'pt-BR'))) {
+    lines.push(`🧑 *${paciente}*`);
     for (const r of regs) {
-      lines.push(`  • ${shortDate(r.data)} – ${r.procedimento} – ${r.hospital}`);
+      lines.push(`  • ${shortDate(r.data)} – ${formatBRL(r.valor)} – ${statusLine(r)}`);
     }
-    lines.push('');
   }
 
   lines.push(DIVIDER);
-  lines.push(`📊 *${registros.length} procedimento${registros.length === 1 ? '' : 's'} em ${monthLabel(mesKey).toLowerCase()}*`);
-  lines.push('📋 _Valores detalhados na planilha (acesso restrito)_');
+  lines.push('📋 _Controle individual de cada paciente na planilha_');
   return lines.join('\n');
 }
 
-export function formatAnestesista(nome, mesKey, registros) {
+// Controle de um paciente específico.
+export function formatPaciente(nome, registros) {
   const lines = [
-    `${doctorEmoji(nome)} *${nome}* — ${monthLabel(mesKey)}`,
+    `🧑 *${nome}* — controle do paciente`,
     DIVIDER,
   ];
   if (!registros.length) {
-    lines.push('_Nenhum procedimento registrado neste mês._');
-  } else {
-    for (const r of registros) {
-      lines.push(`  • ${shortDate(r.data)} – ${r.procedimento} – ${r.hospital} (Cir.: ${r.cirurgiao})`);
-    }
-    lines.push('');
-    lines.push(`📊 Total: *${registros.length} procedimento${registros.length === 1 ? '' : 's'}*`);
+    lines.push('_Nenhum registro encontrado._');
+    return lines.join('\n');
   }
+  for (const r of registros) {
+    const extra = r.procedimento ? ` – ${r.procedimento}` : '';
+    lines.push(`  • ${r.data}${extra} – ${formatBRL(r.valor)} – ${statusLine(r)}`);
+  }
+  lines.push(DIVIDER);
+  lines.push(totalsBlock(registros));
+  return lines.join('\n');
+}
+
+// Registros em aberto (pendentes e glosados).
+export function formatPendentes(registros) {
+  const abertos = registros.filter((r) => r.status !== 'pago');
+  const lines = [
+    '⏳ *Registros em aberto*',
+    DIVIDER,
+  ];
+  if (!abertos.length) {
+    lines.push('🎉 _Nenhuma pendência! Tudo quitado._');
+    return lines.join('\n');
+  }
+  for (const r of abertos.sort((a, b) => a.paciente.localeCompare(b.paciente, 'pt-BR'))) {
+    lines.push(`🧑 ${r.paciente} – ${r.data} – ${formatBRL(r.valor)} – ${statusLine(r)}`);
+  }
+  lines.push(DIVIDER);
+  lines.push(totalsBlock(abertos));
   return lines.join('\n');
 }
 
@@ -104,24 +167,20 @@ export function formatAjuda(isAdmin) {
     '*Consulta*',
     '/relatorio — resumo do mês atual',
     '/mes MM/YYYY — relatório de um mês específico',
-    '/anestesista [nome] — procedimentos de um anestesista no mês',
+    '/paciente [nome] — controle completo de um paciente',
+    '/pendentes — registros não quitados (pendentes e glosas)',
     '/status — última sincronização com a planilha',
     '/ajuda — esta lista',
   ];
   if (isAdmin) {
     lines.push('');
-    lines.push('*Gestão de valores (admin)*');
-    lines.push('/setvalor Procedimento; 2800 — cadastra/atualiza valor');
-    lines.push('/delvalor Procedimento — remove valor');
-    lines.push('/valores — lista procedimentos e valores');
-    lines.push('/setvalorpadrao 1500 — valor padrão (ou "off" p/ desativar)');
-    lines.push('');
-    lines.push('*Gestão geral (admin)*');
+    lines.push('*Gestão (admin)*');
     lines.push('/setprompt [texto] — instrução extra para o extrator');
     lines.push('/limparprompt — remove instrução extra');
     lines.push('/resetar — reseta posição de leitura do grupo');
   }
   lines.push(DIVIDER);
-  lines.push('_Mensagens com médico, hospital, procedimento e data são registradas automaticamente._');
+  lines.push('_Envie paciente, data, valor e situação do pagamento que eu registro automaticamente._');
+  lines.push('_Ex: "Maria Silva – 15/07 – R$3.000 – convênio pagou com glosa de R$400"_');
   return lines.join('\n');
 }

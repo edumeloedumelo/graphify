@@ -26,7 +26,7 @@ const CONFIG_PATH = path.join(STATE_DIR, 'config.json');
 const STATE_PATH = path.join(STATE_DIR, 'state.json');
 const SEED_CONFIG_PATH = path.join(PROJECT_DIR, 'config.json');
 
-const DEFAULT_CONFIG = { procedureValues: [], defaultValue: null, extraPrompt: '' };
+const DEFAULT_CONFIG = { extraPrompt: '' };
 const DEFAULT_STATE = { processedIds: [], lastSync: null, pending: {} };
 
 function readJson(file, fallback) {
@@ -54,7 +54,7 @@ export function loadAll() {
   }
   config = { ...DEFAULT_CONFIG, ...readJson(CONFIG_PATH, DEFAULT_CONFIG) };
   state = { ...DEFAULT_STATE, ...readJson(STATE_PATH, DEFAULT_STATE) };
-  console.log(`[state] carregado de ${STATE_DIR} (${config.procedureValues.length} valores cadastrados)`);
+  console.log(`[state] carregado de ${STATE_DIR}`);
 }
 
 export function getConfig() {

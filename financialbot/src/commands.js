@@ -1,11 +1,9 @@
 // commands.js — comandos do WhatsApp (consulta + gestão admin).
-// Valores monetários aparecem SOMENTE nos comandos de gestão admin
-// (/valores, /setvalor), nunca em relatórios de procedimentos.
 
 import { getConfig, saveConfig, getState, resetChat } from './state.js';
-import { getRegistrosDoMes } from './sheets.js';
+import { getRegistros, getRegistrosDoMes, getRegistrosDoPaciente } from './sheets.js';
 import {
-  formatRelatorio, formatAnestesista, formatAjuda, monthLabel,
+  formatRelatorio, formatPaciente, formatPendentes, formatAjuda, monthLabel,
 } from './format.js';
 
 function currentMonthKey() {
@@ -16,10 +14,6 @@ function currentMonthKey() {
   const m = parts.find((p) => p.type === 'month').value;
   const y = parts.find((p) => p.type === 'year').value;
   return `${m}/${y}`;
-}
-
-function normalize(s) {
-  return String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
 
 const ADMIN_ONLY = '🔒 Comando restrito a administradores.';
@@ -46,17 +40,15 @@ export async function handleCommand(body, { isAdmin }) {
       return formatRelatorio(mes, await getRegistrosDoMes(mes));
     }
 
-    case '/anestesista': {
-      if (!arg) return '⚠️ Uso: /anestesista [nome] (ex: /anestesista Carlos)';
-      const mes = currentMonthKey();
-      const registros = await getRegistrosDoMes(mes);
-      const alvo = normalize(arg);
-      const doAnestesista = registros.filter((r) => normalize(r.anestesista).includes(alvo));
-      if (!doAnestesista.length) {
-        return `🔍 Nenhum procedimento de "${arg}" em ${monthLabel(mes)}.`;
-      }
-      return formatAnestesista(doAnestesista[0].anestesista, mes, doAnestesista);
+    case '/paciente': {
+      if (!arg) return '⚠️ Uso: /paciente [nome] (ex: /paciente Maria)';
+      const registros = await getRegistrosDoPaciente(arg);
+      if (!registros.length) return `🔍 Nenhum registro encontrado para "${arg}".`;
+      return formatPaciente(registros[0].paciente, registros);
     }
+
+    case '/pendentes':
+      return formatPendentes(await getRegistros());
 
     case '/status': {
       const { lastSync } = getState();
@@ -69,73 +61,11 @@ export async function handleCommand(body, { isAdmin }) {
     case '/help':
       return formatAjuda(isAdmin);
 
-    // ---- gestão de valores (admin) ----
-    case '/setvalor': {
-      if (!isAdmin) return ADMIN_ONLY;
-      const parts = arg.split(';');
-      if (parts.length !== 2) return '⚠️ Uso: /setvalor Procedimento; 2800';
-      const procedure = parts[0].trim();
-      const value = Number(parts[1].trim().replace(/\./g, '').replace(',', '.'));
-      if (!procedure || Number.isNaN(value) || value < 0) {
-        return '⚠️ Uso: /setvalor Procedimento; 2800';
-      }
-      const config = getConfig();
-      const existing = config.procedureValues.find((p) => normalize(p.procedure) === normalize(procedure));
-      if (existing) {
-        existing.value = value;
-      } else {
-        config.procedureValues.push({ procedure, value });
-      }
-      saveConfig();
-      return `✅ Valor de *${procedure}* ${existing ? 'atualizado' : 'cadastrado'}.`;
-    }
+    // ---- compatibilidade: informa relatório do mês pedido por nome antigo ----
+    case '/anestesista':
+      return 'ℹ️ Este bot agora controla pagamentos por paciente. Use /paciente [nome].';
 
-    case '/delvalor': {
-      if (!isAdmin) return ADMIN_ONLY;
-      if (!arg) return '⚠️ Uso: /delvalor Procedimento';
-      const config = getConfig();
-      const before = config.procedureValues.length;
-      config.procedureValues = config.procedureValues.filter(
-        (p) => normalize(p.procedure) !== normalize(arg),
-      );
-      if (config.procedureValues.length === before) {
-        return `🔍 Procedimento "${arg}" não encontrado.`;
-      }
-      saveConfig();
-      return `🗑️ Valor de *${arg}* removido.`;
-    }
-
-    case '/valores': {
-      if (!isAdmin) return ADMIN_ONLY;
-      const config = getConfig();
-      if (!config.procedureValues.length) return '📋 Nenhum valor cadastrado.';
-      const lines = ['📋 *Valores cadastrados*'];
-      for (const p of [...config.procedureValues].sort((a, b) => a.procedure.localeCompare(b.procedure))) {
-        lines.push(`  • ${p.procedure}: R$${Number(p.value).toLocaleString('pt-BR')}`);
-      }
-      if (config.defaultValue !== null && config.defaultValue !== undefined) {
-        lines.push('');
-        lines.push(`Valor padrão: R$${Number(config.defaultValue).toLocaleString('pt-BR')}`);
-      }
-      return lines.join('\n');
-    }
-
-    case '/setvalorpadrao': {
-      if (!isAdmin) return ADMIN_ONLY;
-      const config = getConfig();
-      if (normalize(arg) === 'off' || normalize(arg) === 'nenhum') {
-        config.defaultValue = null;
-        saveConfig();
-        return '✅ Valor padrão desativado.';
-      }
-      const value = Number(arg.replace(/\./g, '').replace(',', '.'));
-      if (Number.isNaN(value) || value < 0) return '⚠️ Uso: /setvalorpadrao 1500 (ou "off")';
-      config.defaultValue = value;
-      saveConfig();
-      return '✅ Valor padrão atualizado.';
-    }
-
-    // ---- gestão geral (admin) ----
+    // ---- gestão (admin) ----
     case '/setprompt': {
       if (!isAdmin) return ADMIN_ONLY;
       if (!arg) return '⚠️ Uso: /setprompt [texto da instrução extra]';
@@ -167,3 +97,5 @@ export function handleResetar(chatId) {
   resetChat(chatId);
   return '🔄 Posição de leitura do grupo resetada.';
 }
+
+export { monthLabel };
