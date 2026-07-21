@@ -1,9 +1,10 @@
 // commands.js — comandos do WhatsApp (consulta + gestão admin).
+// `ctx` traz: { isAdmin, ssid, groupName, chatId }.
 
 import { getConfig, saveConfig, getState, resetChat } from './state.js';
 import { getRegistros, getRegistrosDoMes, getRegistrosDoPaciente } from './sheets.js';
 import {
-  formatRelatorio, formatPaciente, formatPendentes, formatAjuda, monthLabel,
+  formatRelatorio, formatPaciente, formatPendentes, formatAjuda,
 } from './format.js';
 
 function currentMonthKey() {
@@ -18,37 +19,49 @@ function currentMonthKey() {
 
 const ADMIN_ONLY = '🔒 Comando restrito a administradores.';
 
-export async function handleCommand(body, { isAdmin }) {
+export async function handleCommand(body, ctx) {
+  const { isAdmin, ssid, groupName, chatId } = ctx;
   const trimmed = body.trim();
   const space = trimmed.search(/\s/);
   const cmd = (space === -1 ? trimmed : trimmed.slice(0, space)).toLowerCase();
   const arg = space === -1 ? '' : trimmed.slice(space + 1).trim();
 
-  console.log(`[commands] ${cmd} (admin=${isAdmin})`);
+  console.log(`[commands] ${cmd} (admin=${isAdmin}, grupo=${groupName || '?'})`);
 
   switch (cmd) {
+    // ---- descoberta do ID do grupo (bootstrap da configuração) ----
+    case '/id':
+      return [
+        '🆔 *ID deste grupo*',
+        `\`${chatId}\``,
+        '',
+        groupName
+          ? `Configurado como: *${groupName}*`
+          : '_Ainda não configurado._ Copie o ID acima e cole na variável GROUP_n_CHAT no Railway.',
+      ].join('\n');
+
     // ---- consulta ----
     case '/relatorio': {
       const mes = currentMonthKey();
-      return formatRelatorio(mes, await getRegistrosDoMes(mes));
+      return formatRelatorio(mes, await getRegistrosDoMes(ssid, mes), groupName);
     }
 
     case '/mes': {
       const m = arg.match(/^(\d{1,2})\/(\d{4})$/);
       if (!m) return '⚠️ Uso: /mes MM/YYYY (ex: /mes 07/2025)';
       const mes = `${m[1].padStart(2, '0')}/${m[2]}`;
-      return formatRelatorio(mes, await getRegistrosDoMes(mes));
+      return formatRelatorio(mes, await getRegistrosDoMes(ssid, mes), groupName);
     }
 
     case '/paciente': {
       if (!arg) return '⚠️ Uso: /paciente [nome] (ex: /paciente Maria)';
-      const registros = await getRegistrosDoPaciente(arg);
+      const registros = await getRegistrosDoPaciente(ssid, arg);
       if (!registros.length) return `🔍 Nenhum registro encontrado para "${arg}".`;
       return formatPaciente(registros[0].paciente, registros);
     }
 
     case '/pendentes':
-      return formatPendentes(await getRegistros());
+      return formatPendentes(await getRegistros(ssid));
 
     case '/status': {
       const { lastSync } = getState();
@@ -60,10 +73,6 @@ export async function handleCommand(body, { isAdmin }) {
     case '/ajuda':
     case '/help':
       return formatAjuda(isAdmin);
-
-    // ---- compatibilidade: informa relatório do mês pedido por nome antigo ----
-    case '/anestesista':
-      return 'ℹ️ Este bot agora controla pagamentos por paciente. Use /paciente [nome].';
 
     // ---- gestão (admin) ----
     case '/setprompt': {
@@ -97,5 +106,3 @@ export function handleResetar(chatId) {
   resetChat(chatId);
   return '🔄 Posição de leitura do grupo resetada.';
 }
-
-export { monthLabel };

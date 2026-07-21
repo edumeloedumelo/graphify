@@ -1,5 +1,6 @@
-// router.js — roteia mensagens recebidas: comandos "/..." vs detecção
-// automática de registros financeiros vs complemento de registro pendente.
+// router.js — roteamento por grupo de WhatsApp. Cada grupo mapeia para um
+// "controle" (nome + planilha). O grupo de onde a mensagem veio determina para
+// qual planilha o registro vai — a secretária não precisa dizer de quem é.
 
 import crypto from 'crypto';
 import { sendMessage } from './ultramsg.js';
@@ -12,7 +13,7 @@ import {
   formatRegistroConfirmado, formatPagamentoAtualizado, formatCamposFaltando,
 } from './format.js';
 import {
-  isProcessed, markProcessed, getPending, setPending, clearPending,
+  isProcessed, markProcessed, getPending, setPending, clearPending, findGroup, getGroups,
 } from './state.js';
 
 function parseList(envVar) {
@@ -26,19 +27,13 @@ function digits(s) {
   return String(s).replace(/\D/g, '');
 }
 
-function isChatAllowed(chatId) {
-  const allowed = parseList('ALLOWED_CHATS');
-  if (!allowed.length) return true; // vazio = todos
-  return allowed.includes(chatId);
-}
-
 function isAdmin(sender) {
   const admins = parseList('ADMIN_NUMBERS').map(digits);
   const s = digits(sender);
   return admins.some((a) => a && (s === a || s.endsWith(a) || a.endsWith(s)));
 }
 
-async function saveNewRecord(chatId, sender, extracted) {
+async function saveNewRecord(chatId, sender, group, extracted) {
   const norm = normalizePayment(extracted);
   const registro = {
     data: norm.data,
@@ -53,14 +48,14 @@ async function saveNewRecord(chatId, sender, extracted) {
     id: crypto.randomUUID().slice(0, 8),
   };
 
-  console.log(`[router] registrando ${registro.id}: ${registro.paciente} ${registro.data} (${registro.status})`);
-  await appendRegistro(registro);
+  console.log(`[router] [${group.name}] registrando ${registro.id}: ${registro.paciente} ${registro.data} (${registro.status})`);
+  await appendRegistro(group.spreadsheetId, registro);
   clearPending(chatId, sender);
-  await sendMessage(chatId, formatRegistroConfirmado(registro));
+  await sendMessage(chatId, formatRegistroConfirmado(registro, group.name));
 }
 
-async function applyPaymentUpdate(chatId, sender, extracted) {
-  const updated = await updatePagamento(extracted.paciente, {
+async function applyPaymentUpdate(chatId, sender, group, extracted) {
+  const updated = await updatePagamento(group.spreadsheetId, extracted.paciente, {
     status: extracted.status_pagamento || null,
     valorPago: extracted.valor_pago ?? null,
     glosa: extracted.valor_glosado ?? null,
@@ -74,14 +69,14 @@ async function applyPaymentUpdate(chatId, sender, extracted) {
   await sendMessage(chatId, formatPagamentoAtualizado(updated));
 }
 
-async function processExtraction(chatId, sender, extracted) {
+async function processExtraction(chatId, sender, group, extracted) {
   if (extracted.tipo === 'atualizacao') {
     if (!extracted.paciente) {
       setPending(chatId, sender, extracted);
       await sendMessage(chatId, formatCamposFaltando(['nome do paciente']));
       return;
     }
-    await applyPaymentUpdate(chatId, sender, extracted);
+    await applyPaymentUpdate(chatId, sender, group, extracted);
     return;
   }
 
@@ -91,7 +86,7 @@ async function processExtraction(chatId, sender, extracted) {
     await sendMessage(chatId, formatCamposFaltando(missing));
     return;
   }
-  await saveNewRecord(chatId, sender, extracted);
+  await saveNewRecord(chatId, sender, group, extracted);
 }
 
 export async function handleIncoming(msg) {
@@ -100,17 +95,36 @@ export async function handleIncoming(msg) {
 
   if (fromMe) return;
   if (!body || !body.trim()) return;
-  if (!isChatAllowed(chatId)) {
-    console.log(`[router] chat ${chatId} não autorizado, ignorando`);
+
+  const text = body.trim();
+  const group = findGroup(chatId);
+
+  // /id funciona em qualquer grupo — é o bootstrap para descobrir os chatIds.
+  if (text.toLowerCase().startsWith('/id')) {
+    if (id && isProcessed(id)) return;
+    markProcessed(id);
+    await sendMessage(chatId, await handleCommand('/id', {
+      isAdmin: isAdmin(sender), ssid: group?.spreadsheetId, groupName: group?.name, chatId,
+    }));
     return;
   }
+
+  // Grupos não configurados são ignorados silenciosamente.
+  if (!group) {
+    if (!getGroups().length) {
+      console.log('[router] nenhum grupo configurado ainda. Envie /id no grupo para pegar o chatId.');
+    } else {
+      console.log(`[router] grupo ${chatId} não configurado, ignorando`);
+    }
+    return;
+  }
+
   if (id && isProcessed(id)) {
     console.log(`[router] mensagem ${id} já processada, ignorando`);
     return;
   }
   markProcessed(id);
 
-  const text = body.trim();
   const admin = isAdmin(sender);
 
   try {
@@ -124,7 +138,9 @@ export async function handleIncoming(msg) {
         await sendMessage(chatId, handleResetar(chatId));
         return;
       }
-      const reply = await handleCommand(text, { isAdmin: admin });
+      const reply = await handleCommand(text, {
+        isAdmin: admin, ssid: group.spreadsheetId, groupName: group.name, chatId,
+      });
       if (reply) await sendMessage(chatId, reply);
       return;
     }
@@ -134,11 +150,10 @@ export async function handleIncoming(msg) {
     if (pending) {
       const merged = await extractRecord(text, pending);
       if (!merged.e_registro) {
-        // usuário mudou de assunto — descarta a pendência silenciosamente
         clearPending(chatId, sender);
         return;
       }
-      await processExtraction(chatId, sender, merged);
+      await processExtraction(chatId, sender, group, merged);
       return;
     }
 
@@ -150,7 +165,7 @@ export async function handleIncoming(msg) {
       console.log('[router] Claude classificou como não-registro, ignorando');
       return;
     }
-    await processExtraction(chatId, sender, extracted);
+    await processExtraction(chatId, sender, group, extracted);
   } catch (err) {
     console.error('[router] erro ao processar mensagem:', err);
     await sendMessage(chatId, '❌ Erro ao processar. Tente novamente em instantes.');

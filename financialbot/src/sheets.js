@@ -1,7 +1,9 @@
 // sheets.js — Google Sheets API v4: controle financeiro por paciente.
-// Abas: "Registros" (dados brutos), "Resumo_Mensal" (totais por mês),
-// "Pacientes" (visão geral, uma linha por paciente) e uma aba individual
-// por paciente com todo o histórico + totais (criadas automaticamente).
+// Cada grupo de WhatsApp aponta para uma planilha (spreadsheetId) — por isso
+// o id é passado em cada operação, permitindo planilhas separadas por grupo.
+// Abas por planilha: "Registros" (dados brutos), "Resumo_Mensal" (totais por
+// mês), "Pacientes" (uma linha por paciente) e uma aba individual por paciente
+// com histórico + totais (criadas automaticamente).
 
 import { google } from 'googleapis';
 import { setLastSync } from './state.js';
@@ -19,12 +21,6 @@ const STATUS_LABEL = { pago: 'Pago 100%', glosado: 'Glosado', pendente: 'Pendent
 
 let sheetsClient = null;
 
-function spreadsheetId() {
-  const id = process.env.SPREADSHEET_ID;
-  if (!id) throw new Error('SPREADSHEET_ID não configurado');
-  return id;
-}
-
 async function getClient() {
   if (sheetsClient) return sheetsClient;
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT;
@@ -38,22 +34,27 @@ async function getClient() {
   return sheetsClient;
 }
 
-async function listSheetTitles(api) {
-  const meta = await api.spreadsheets.get({ spreadsheetId: spreadsheetId() });
+function requireId(ssid) {
+  if (!ssid) throw new Error('spreadsheetId ausente (configure SPREADSHEET_ID ou GROUP_n_SHEET)');
+  return ssid;
+}
+
+async function listSheetTitles(api, ssid) {
+  const meta = await api.spreadsheets.get({ spreadsheetId: ssid });
   return meta.data.sheets.map((s) => s.properties.title);
 }
 
-async function ensureSheet(api, title, headers) {
-  const titles = await listSheetTitles(api);
+async function ensureSheet(api, ssid, title, headers) {
+  const titles = await listSheetTitles(api, ssid);
   if (titles.includes(title)) return false;
   console.log(`[sheets] criando aba "${title}"`);
   await api.spreadsheets.batchUpdate({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     requestBody: { requests: [{ addSheet: { properties: { title } } }] },
   });
   if (headers?.length) {
     await api.spreadsheets.values.update({
-      spreadsheetId: spreadsheetId(),
+      spreadsheetId: ssid,
       range: `'${title}'!A1`,
       valueInputOption: 'RAW',
       requestBody: { values: [headers] },
@@ -85,11 +86,12 @@ function dateSortKey(dataBR) {
 
 // ---- leitura ----
 
-export async function getRegistros() {
+export async function getRegistros(ssid) {
+  ssid = requireId(ssid);
   const api = await getClient();
-  await ensureSheet(api, REGISTROS_SHEET, REGISTROS_HEADERS);
+  await ensureSheet(api, ssid, REGISTROS_SHEET, REGISTROS_HEADERS);
   const res = await api.spreadsheets.values.get({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     range: `'${REGISTROS_SHEET}'!A2:K`,
   });
   const rows = res.data.values || [];
@@ -113,22 +115,23 @@ export async function getRegistros() {
     }));
 }
 
-export async function getRegistrosDoMes(mesKey) {
-  const all = await getRegistros();
+export async function getRegistrosDoMes(ssid, mesKey) {
+  const all = await getRegistros(ssid);
   return all.filter((r) => r.mes === mesKey);
 }
 
-export async function getRegistrosDoPaciente(nome) {
-  const all = await getRegistros();
+export async function getRegistrosDoPaciente(ssid, nome) {
+  const all = await getRegistros(ssid);
   const alvo = normalizeName(nome);
   return all.filter((r) => normalizeName(r.paciente).includes(alvo));
 }
 
 // ---- escrita ----
 
-export async function appendRegistro(registro) {
+export async function appendRegistro(ssid, registro) {
+  ssid = requireId(ssid);
   const api = await getClient();
-  await ensureSheet(api, REGISTROS_SHEET, REGISTROS_HEADERS);
+  await ensureSheet(api, ssid, REGISTROS_SHEET, REGISTROS_HEADERS);
   const row = [
     registro.data,
     registro.paciente,
@@ -143,22 +146,23 @@ export async function appendRegistro(registro) {
     registro.id,
   ];
   await api.spreadsheets.values.append({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     range: `'${REGISTROS_SHEET}'!A:K`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [row] },
   });
   console.log(`[sheets] registro ${registro.id} inserido (${registro.paciente})`);
 
-  await rebuildDerivedSheets(api, registro.paciente);
+  await rebuildDerivedSheets(api, ssid, registro.paciente);
   setLastSync();
 }
 
 // Atualiza o pagamento do registro mais recente ainda não quitado do paciente.
 // Retorna o registro atualizado, ou null se nada foi encontrado.
-export async function updatePagamento(paciente, { status, valorPago, glosa, observacoes }) {
+export async function updatePagamento(ssid, paciente, { status, valorPago, glosa, observacoes }) {
+  ssid = requireId(ssid);
   const api = await getClient();
-  const registros = await getRegistrosDoPaciente(paciente);
+  const registros = await getRegistrosDoPaciente(ssid, paciente);
   if (!registros.length) return null;
 
   // preferimos o registro em aberto mais recente; se todos quitados, o mais recente
@@ -179,25 +183,25 @@ export async function updatePagamento(paciente, { status, valorPago, glosa, obse
     : alvo.observacoes;
 
   await api.spreadsheets.values.update({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     range: `'${REGISTROS_SHEET}'!F${alvo.rowNumber}:I${alvo.rowNumber}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [[novoPago, novaGlosa, novoStatus, novasObs]] },
   });
   console.log(`[sheets] pagamento atualizado: ${alvo.paciente} ${alvo.data} → ${novoStatus}`);
 
-  await rebuildDerivedSheets(api, alvo.paciente);
+  await rebuildDerivedSheets(api, ssid, alvo.paciente);
   setLastSync();
   return { ...alvo, status: novoStatus, valorPago: novoPago, glosa: novaGlosa };
 }
 
 // ---- abas derivadas (recalculadas do zero a partir de Registros) ----
 
-async function rebuildDerivedSheets(api, pacienteAlterado) {
-  const registros = await getRegistros();
-  await updateResumoMensal(api, registros);
-  await updatePacientesOverview(api, registros);
-  if (pacienteAlterado) await updatePatientSheet(api, registros, pacienteAlterado);
+async function rebuildDerivedSheets(api, ssid, pacienteAlterado) {
+  const registros = await getRegistros(ssid);
+  await updateResumoMensal(api, ssid, registros);
+  await updatePacientesOverview(api, ssid, registros);
+  if (pacienteAlterado) await updatePatientSheet(api, ssid, registros, pacienteAlterado);
 }
 
 function pendenteDe(r) {
@@ -205,7 +209,7 @@ function pendenteDe(r) {
   return Math.max(r.valor - r.valorPago - r.glosa, 0);
 }
 
-async function updateResumoMensal(api, registros) {
+async function updateResumoMensal(api, ssid, registros) {
   const months = [...new Set(registros.map((r) => r.mes).filter(Boolean))]
     .sort((a, b) => {
       const [ma, ya] = a.split('/').map(Number);
@@ -223,10 +227,10 @@ async function updateResumoMensal(api, registros) {
     return [mes, doMes.length, formatBRL(faturado), formatBRL(recebido), formatBRL(glosas), formatBRL(pendente)];
   });
 
-  await ensureSheet(api, RESUMO_SHEET);
-  await api.spreadsheets.values.clear({ spreadsheetId: spreadsheetId(), range: `'${RESUMO_SHEET}'!A:Z` });
+  await ensureSheet(api, ssid, RESUMO_SHEET);
+  await api.spreadsheets.values.clear({ spreadsheetId: ssid, range: `'${RESUMO_SHEET}'!A:Z` });
   await api.spreadsheets.values.update({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     range: `'${RESUMO_SHEET}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: [header, ...rows] },
@@ -235,7 +239,7 @@ async function updateResumoMensal(api, registros) {
 }
 
 // Visão geral: uma linha por paciente com os totais.
-async function updatePacientesOverview(api, registros) {
+async function updatePacientesOverview(api, ssid, registros) {
   const byPatient = new Map();
   for (const r of registros) {
     const key = normalizeName(r.paciente);
@@ -255,10 +259,10 @@ async function updatePacientesOverview(api, registros) {
       return [nome, regs.length, formatBRL(faturado), formatBRL(recebido), formatBRL(glosas), formatBRL(pendente), ultimo];
     });
 
-  await ensureSheet(api, PACIENTES_SHEET);
-  await api.spreadsheets.values.clear({ spreadsheetId: spreadsheetId(), range: `'${PACIENTES_SHEET}'!A:Z` });
+  await ensureSheet(api, ssid, PACIENTES_SHEET);
+  await api.spreadsheets.values.clear({ spreadsheetId: ssid, range: `'${PACIENTES_SHEET}'!A:Z` });
   await api.spreadsheets.values.update({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     range: `'${PACIENTES_SHEET}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: [header, ...rows] },
@@ -267,7 +271,7 @@ async function updatePacientesOverview(api, registros) {
 }
 
 // Aba individual do paciente: histórico completo + linha de totais.
-async function updatePatientSheet(api, registros, paciente) {
+async function updatePatientSheet(api, ssid, registros, paciente) {
   const key = normalizeName(paciente);
   const doPaciente = registros
     .filter((r) => normalizeName(r.paciente) === key)
@@ -292,10 +296,10 @@ async function updatePatientSheet(api, registros, paciente) {
     pendente > 0 ? `Pendente: ${formatBRL(pendente)}` : 'Quitado', '',
   ];
 
-  await ensureSheet(api, title);
-  await api.spreadsheets.values.clear({ spreadsheetId: spreadsheetId(), range: `'${title}'!A:Z` });
+  await ensureSheet(api, ssid, title);
+  await api.spreadsheets.values.clear({ spreadsheetId: ssid, range: `'${title}'!A:Z` });
   await api.spreadsheets.values.update({
-    spreadsheetId: spreadsheetId(),
+    spreadsheetId: ssid,
     range: `'${title}'!A1`,
     valueInputOption: 'RAW',
     requestBody: { values: [header, ...rows, totalRow] },

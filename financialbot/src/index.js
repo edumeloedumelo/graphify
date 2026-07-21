@@ -3,7 +3,7 @@
 
 import 'dotenv/config';
 import express from 'express';
-import { loadAll } from './state.js';
+import { loadAll, getGroups } from './state.js';
 import { handleIncoming } from './router.js';
 
 const app = express();
@@ -58,10 +58,18 @@ app.listen(PORT, () => {
   console.log(`[index] Financial Bot Control ouvindo na porta ${PORT}`);
   const required = [
     'ULTRAMSG_INSTANCE_ID', 'ULTRAMSG_TOKEN', 'ANTHROPIC_API_KEY',
-    'GOOGLE_SERVICE_ACCOUNT', 'SPREADSHEET_ID',
+    'GOOGLE_SERVICE_ACCOUNT',
   ];
   const missing = required.filter((v) => !process.env[v]);
   if (missing.length) {
     console.warn(`[index] variáveis de ambiente ausentes: ${missing.join(', ')}`);
+  }
+  const groups = getGroups();
+  if (!groups.length) {
+    console.warn('[index] nenhum grupo configurado (GROUP_1_CHAT, ...). Envie /id num grupo para descobrir o chatId.');
+  } else {
+    for (const g of groups) {
+      console.log(`[index] grupo "${g.name}" → ${g.chatId} → planilha ${g.spreadsheetId ? g.spreadsheetId.slice(0, 8) + '…' : '(SEM PLANILHA!)'}`);
+    }
   }
 });

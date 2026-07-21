@@ -39,9 +39,9 @@ function statusLine(r) {
   return `${emoji} ${text}`;
 }
 
-export function formatRegistroConfirmado(r) {
+export function formatRegistroConfirmado(r, groupName) {
   const lines = [
-    '✅ *Registro salvo*',
+    `✅ *Registro salvo*${groupName ? ` — ${groupName}` : ''}`,
     `🧑 Paciente: ${r.paciente}`,
   ];
   if (r.procedimento) lines.push(`🔪 Procedimento: ${r.procedimento}`);
@@ -87,9 +87,9 @@ function totalsBlock(registros) {
 }
 
 // Relatório mensal: totais + detalhe por paciente.
-export function formatRelatorio(mesKey, registros) {
+export function formatRelatorio(mesKey, registros, groupName) {
   const lines = [
-    '🏦 *FINANCIAL BOT CONTROL*',
+    `🏦 *FINANCIAL BOT CONTROL*${groupName ? ` — ${groupName}` : ''}`,
     DIVIDER,
     `📅 *${monthLabel(mesKey)}* — ${registros.length} registro${registros.length === 1 ? '' : 's'}`,
     DIVIDER,
@@ -170,6 +170,7 @@ export function formatAjuda(isAdmin) {
     '/paciente [nome] — controle completo de um paciente',
     '/pendentes — registros não quitados (pendentes e glosas)',
     '/status — última sincronização com a planilha',
+    '/id — mostra o ID deste grupo (para configuração)',
     '/ajuda — esta lista',
   ];
   if (isAdmin) {

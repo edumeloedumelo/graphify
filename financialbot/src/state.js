@@ -61,6 +61,29 @@ export function getConfig() {
   return config;
 }
 
+// ---- grupos (roteamento por grupo de WhatsApp) ----
+// Configurados por variáveis de ambiente numeradas:
+//   GROUP_1_CHAT=<chatId do grupo>   GROUP_1_NAME=Eduardo   GROUP_1_SHEET=<spreadsheetId>
+//   GROUP_2_CHAT=<chatId do grupo>   GROUP_2_NAME=Fernanda  GROUP_2_SHEET=<spreadsheetId>
+// GROUP_n_SHEET é opcional: se vazio, usa SPREADSHEET_ID (planilha compartilhada).
+export function getGroups() {
+  const groups = [];
+  for (let i = 1; i <= 20; i++) {
+    const chatId = (process.env[`GROUP_${i}_CHAT`] || '').trim();
+    if (!chatId) continue;
+    groups.push({
+      chatId,
+      name: (process.env[`GROUP_${i}_NAME`] || `Grupo ${i}`).trim(),
+      spreadsheetId: (process.env[`GROUP_${i}_SHEET`] || process.env.SPREADSHEET_ID || '').trim(),
+    });
+  }
+  return groups;
+}
+
+export function findGroup(chatId) {
+  return getGroups().find((g) => g.chatId === chatId) || null;
+}
+
 export function saveConfig() {
   writeJson(CONFIG_PATH, config);
 }
