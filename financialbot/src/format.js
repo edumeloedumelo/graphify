@@ -2,6 +2,8 @@
 // Neste fluxo (grupo da secretária) os valores APARECEM nas respostas —
 // é a própria secretária quem os informa.
 
+import { computeSaraSalary } from './sara.js';
+
 const MONTH_NAMES = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
@@ -45,11 +47,14 @@ export function formatRegistroConfirmado(r, groupName) {
     `🧑 Paciente: ${r.paciente}`,
   ];
   if (r.procedimento) lines.push(`🔪 Procedimento: ${r.procedimento}`);
-  if (r.convenio) lines.push(`🏥 Convênio: ${r.convenio}`);
+  if (r.cirurgiao) lines.push(`👨‍⚕️ Cirurgião: ${r.cirurgiao}`);
+  if (r.clinica) lines.push(`🏥 Clínica: ${r.clinica}`);
+  if (r.convenio) lines.push(`💳 Convênio: ${r.convenio}`);
   lines.push(`📅 Data: ${r.data}`);
   lines.push(`💰 Valor: ${formatBRL(r.valor)}`);
   lines.push(`💳 Situação: ${statusLine(r)}`);
   if (r.observacoes) lines.push(`📝 Obs: ${r.observacoes}`);
+  if (r.contaSara) lines.push('👩‍💼 _Conta para a comissão da Sara_');
   return lines.join('\n');
 }
 
@@ -117,8 +122,41 @@ export function formatRelatorio(mesKey, registros, groupName) {
     }
   }
 
+  const sara = computeSaraSalary(registros);
+  if (sara.count) {
+    lines.push(DIVIDER);
+    lines.push(`👩‍💼 *Comissão da Sara:* ${formatBRL(sara.comissao)}`);
+    lines.push(`_(${sara.count} cirurgia${sara.count === 1 ? '' : 's'} · 5% do líquido)_`);
+  }
+
   lines.push(DIVIDER);
   lines.push('📋 _Controle individual de cada paciente na planilha_');
+  return lines.join('\n');
+}
+
+// Detalhe da comissão da Sara.
+export function formatSara(mesKey, registros) {
+  const s = computeSaraSalary(registros);
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const lines = [
+    `👩‍💼 *Comissão da Sara — ${monthLabel(mesKey)}*`,
+    DIVIDER,
+  ];
+  if (!s.count) {
+    lines.push('_Nenhuma cirurgia autorizada pela Sara neste mês._');
+    return lines.join('\n');
+  }
+  lines.push(`🔪 Cirurgias autorizadas: ${s.count}`);
+  lines.push(`💰 Bruto: ${formatBRL(s.bruto)}`);
+  lines.push(`➖ Imposto (${pct(s.taxRate)}): ${formatBRL(s.imposto)}`);
+  lines.push(`💵 Líquido: ${formatBRL(s.liquido)}`);
+  lines.push(DIVIDER);
+  lines.push(`🧮 *Comissão (${pct(s.commissionRate)}): ${formatBRL(s.comissao)}*`);
+  lines.push('');
+  lines.push('_Cirurgias:_');
+  for (const r of s.qualifying) {
+    lines.push(`  • ${r.data} – ${r.paciente} – ${formatBRL(r.valor)}${r.cirurgiao ? ` (${r.cirurgiao})` : ''}`);
+  }
   return lines.join('\n');
 }
 
@@ -169,6 +207,7 @@ export function formatAjuda(isAdmin) {
     '/mes MM/YYYY — relatório de um mês específico',
     '/paciente [nome] — controle completo de um paciente',
     '/pendentes — registros não quitados (pendentes e glosas)',
+    '/sara [MM/YYYY] — comissão da secretária no mês',
     '/status — última sincronização com a planilha',
     '/id — mostra o ID deste grupo (para configuração)',
     '/ajuda — esta lista',
@@ -176,6 +215,11 @@ export function formatAjuda(isAdmin) {
   if (isAdmin) {
     lines.push('');
     lines.push('*Gestão (admin)*');
+    lines.push('/saraconfig — vê a config da comissão da Sara');
+    lines.push('/addcirurgiao [nome] — inclui cirurgião na comissão da Sara');
+    lines.push('/delcirurgiao [nome] — remove cirurgião');
+    lines.push('/addclinica [nome] — inclui clínica na comissão da Sara');
+    lines.push('/delclinica [nome] — remove clínica');
     lines.push('/setprompt [texto] — instrução extra para o extrator');
     lines.push('/limparprompt — remove instrução extra');
     lines.push('/resetar — reseta posição de leitura do grupo');

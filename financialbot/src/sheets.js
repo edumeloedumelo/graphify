@@ -8,12 +8,14 @@
 import { google } from 'googleapis';
 import { setLastSync } from './state.js';
 import { formatBRL } from './format.js';
+import { computeSaraSalary, qualifiesForSara } from './sara.js';
 
 const REGISTROS_SHEET = 'Registros';
 const RESUMO_SHEET = 'Resumo_Mensal';
 const PACIENTES_SHEET = 'Pacientes';
+const SARA_SHEET = 'Comissao_Sara';
 const REGISTROS_HEADERS = [
-  'Data', 'Paciente', 'Procedimento', 'Convênio', 'Valor (R$)',
+  'Data', 'Paciente', 'Procedimento', 'Cirurgião', 'Clínica', 'Convênio', 'Valor (R$)',
   'Valor Pago (R$)', 'Glosa (R$)', 'Status', 'Observações', 'Registrado_em', 'ID',
 ];
 
@@ -92,27 +94,33 @@ export async function getRegistros(ssid) {
   await ensureSheet(api, ssid, REGISTROS_SHEET, REGISTROS_HEADERS);
   const res = await api.spreadsheets.values.get({
     spreadsheetId: ssid,
-    range: `'${REGISTROS_SHEET}'!A2:K`,
+    range: `'${REGISTROS_SHEET}'!A2:M`,
   });
   const rows = res.data.values || [];
   return rows
     .map((r, i) => ({ r, rowNumber: i + 2 }))
     .filter(({ r }) => r[0] || r[1])
-    .map(({ r, rowNumber }) => ({
-      rowNumber,
-      data: r[0] || '',
-      paciente: r[1] || '',
-      procedimento: r[2] || '',
-      convenio: r[3] || '',
-      valor: Number(r[4]) || 0,
-      valorPago: Number(r[5]) || 0,
-      glosa: Number(r[6]) || 0,
-      status: r[7] || 'pendente',
-      observacoes: r[8] || '',
-      registradoEm: r[9] || '',
-      id: r[10] || '',
-      mes: monthKeyFromDate(r[0]),
-    }));
+    .map(({ r, rowNumber }) => {
+      const rec = {
+        rowNumber,
+        data: r[0] || '',
+        paciente: r[1] || '',
+        procedimento: r[2] || '',
+        cirurgiao: r[3] || '',
+        clinica: r[4] || '',
+        convenio: r[5] || '',
+        valor: Number(r[6]) || 0,
+        valorPago: Number(r[7]) || 0,
+        glosa: Number(r[8]) || 0,
+        status: r[9] || 'pendente',
+        observacoes: r[10] || '',
+        registradoEm: r[11] || '',
+        id: r[12] || '',
+        mes: monthKeyFromDate(r[0]),
+      };
+      rec.contaSara = qualifiesForSara(rec);
+      return rec;
+    });
 }
 
 export async function getRegistrosDoMes(ssid, mesKey) {
@@ -136,6 +144,8 @@ export async function appendRegistro(ssid, registro) {
     registro.data,
     registro.paciente,
     registro.procedimento || '',
+    registro.cirurgiao || '',
+    registro.clinica || '',
     registro.convenio || '',
     registro.valor ?? '',
     registro.valorPago ?? '',
@@ -147,7 +157,7 @@ export async function appendRegistro(ssid, registro) {
   ];
   await api.spreadsheets.values.append({
     spreadsheetId: ssid,
-    range: `'${REGISTROS_SHEET}'!A:K`,
+    range: `'${REGISTROS_SHEET}'!A:M`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [row] },
   });
@@ -182,9 +192,10 @@ export async function updatePagamento(ssid, paciente, { status, valorPago, glosa
     ? (alvo.observacoes ? `${alvo.observacoes} | ${observacoes}` : observacoes)
     : alvo.observacoes;
 
+  // Colunas: Valor Pago=H, Glosa=I, Status=J, Observações=K (contíguas)
   await api.spreadsheets.values.update({
     spreadsheetId: ssid,
-    range: `'${REGISTROS_SHEET}'!F${alvo.rowNumber}:I${alvo.rowNumber}`,
+    range: `'${REGISTROS_SHEET}'!H${alvo.rowNumber}:K${alvo.rowNumber}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [[novoPago, novaGlosa, novoStatus, novasObs]] },
   });
@@ -201,6 +212,7 @@ async function rebuildDerivedSheets(api, ssid, pacienteAlterado) {
   const registros = await getRegistros(ssid);
   await updateResumoMensal(api, ssid, registros);
   await updatePacientesOverview(api, ssid, registros);
+  await updateSaraSheet(api, ssid, registros);
   if (pacienteAlterado) await updatePatientSheet(api, ssid, registros, pacienteAlterado);
 }
 
@@ -281,10 +293,10 @@ async function updatePatientSheet(api, ssid, registros, paciente) {
   const displayName = doPaciente[0].paciente;
   const title = patientSheetTitle(displayName);
 
-  const header = ['Data', 'Procedimento', 'Convênio', 'Valor', 'Valor Pago', 'Glosa', 'Status', 'Observações'];
+  const header = ['Data', 'Procedimento', 'Cirurgião', 'Clínica', 'Convênio', 'Valor', 'Valor Pago', 'Glosa', 'Status', 'Observações'];
   const rows = doPaciente.map((r) => [
-    r.data, r.procedimento, r.convenio, formatBRL(r.valor), formatBRL(r.valorPago),
-    formatBRL(r.glosa), STATUS_LABEL[r.status] || r.status, r.observacoes,
+    r.data, r.procedimento, r.cirurgiao, r.clinica, r.convenio, formatBRL(r.valor),
+    formatBRL(r.valorPago), formatBRL(r.glosa), STATUS_LABEL[r.status] || r.status, r.observacoes,
   ]);
 
   const faturado = doPaciente.reduce((a, r) => a + r.valor, 0);
@@ -292,7 +304,7 @@ async function updatePatientSheet(api, ssid, registros, paciente) {
   const glosas = doPaciente.reduce((a, r) => a + r.glosa, 0);
   const pendente = doPaciente.reduce((a, r) => a + pendenteDe(r), 0);
   const totalRow = [
-    'TOTAL', '', '', formatBRL(faturado), formatBRL(recebido), formatBRL(glosas),
+    'TOTAL', '', '', '', '', formatBRL(faturado), formatBRL(recebido), formatBRL(glosas),
     pendente > 0 ? `Pendente: ${formatBRL(pendente)}` : 'Quitado', '',
   ];
 
@@ -305,4 +317,55 @@ async function updatePatientSheet(api, ssid, registros, paciente) {
     requestBody: { values: [header, ...rows, totalRow] },
   });
   console.log(`[sheets] aba do paciente "${title}" atualizada (${doPaciente.length} registros)`);
+}
+
+// Aba "Comissao_Sara": comissão da secretária por mês (5% do líquido das
+// cirurgias autorizadas por ela) + detalhe das cirurgias que contaram.
+async function updateSaraSheet(api, ssid, registros) {
+  const months = [...new Set(registros.map((r) => r.mes).filter(Boolean))]
+    .sort((a, b) => {
+      const [ma, ya] = a.split('/').map(Number);
+      const [mb, yb] = b.split('/').map(Number);
+      return yb * 100 + mb - (ya * 100 + ma);
+    });
+
+  const geral = computeSaraSalary(registros);
+  const pct = (x) => `${Math.round(x * 100)}%`;
+
+  const values = [];
+  values.push([
+    'Mês', 'Cirurgias', 'Bruto', `Imposto (${pct(geral.taxRate)})`,
+    'Líquido', `Comissão Sara (${pct(geral.commissionRate)})`,
+  ]);
+  for (const mes of months) {
+    const s = computeSaraSalary(registros.filter((r) => r.mes === mes));
+    if (!s.count) continue;
+    values.push([
+      mes, s.count, formatBRL(s.bruto), formatBRL(s.imposto),
+      formatBRL(s.liquido), formatBRL(s.comissao),
+    ]);
+  }
+  values.push([
+    'TOTAL', geral.count, formatBRL(geral.bruto), formatBRL(geral.imposto),
+    formatBRL(geral.liquido), formatBRL(geral.comissao),
+  ]);
+
+  // Detalhe das cirurgias que contaram
+  values.push([]);
+  values.push([`Base de cálculo: ${geral.basis === 'recebido' ? 'valor recebido' : 'valor faturado (bruto)'}`]);
+  values.push(['Cirurgias que contam para a Sara:']);
+  values.push(['Data', 'Paciente', 'Cirurgião', 'Clínica', 'Valor']);
+  for (const r of geral.qualifying.sort((a, b) => dateSortKey(a.data) - dateSortKey(b.data))) {
+    values.push([r.data, r.paciente, r.cirurgiao, r.clinica, formatBRL(r.valor)]);
+  }
+
+  await ensureSheet(api, ssid, SARA_SHEET);
+  await api.spreadsheets.values.clear({ spreadsheetId: ssid, range: `'${SARA_SHEET}'!A:Z` });
+  await api.spreadsheets.values.update({
+    spreadsheetId: ssid,
+    range: `'${SARA_SHEET}'!A1`,
+    valueInputOption: 'RAW',
+    requestBody: { values },
+  });
+  console.log(`[sheets] Comissao_Sara atualizado (${geral.count} cirurgias, comissão ${formatBRL(geral.comissao)})`);
 }

@@ -37,22 +37,47 @@ Ana Pereira / Unimed / hoje / 3200 / pendente
 Caiu o pagamento da Maria Silva
 ```
 
+## Comissão da secretária (Sara)
+
+O bot calcula automaticamente o salário da Sara: **5% do líquido** das cirurgias
+que ela autoriza, onde **líquido = bruto − 20% de imposto**.
+
+Uma cirurgia "conta" para a Sara quando o **cirurgião** OU a **clínica** estão
+cadastrados. Padrão: cirurgiões **Raphael Datrino** e **Gustavo Siqueira**, e
+clínica **Clínica Dat Baby** (qualquer cirurgião nessa clínica conta). Para que o
+bot reconheça, a secretária deve incluir o cirurgião ou a clínica na mensagem:
+
+```
+Maria Silva - 15/07 - R$10.000 - Dr. Raphael Datrino - pago
+João - ontem - 8.000 - Clínica Dat Baby - Dr. Gustavo Siqueira - pago
+```
+
+Consulte com `/sara` (mês atual) ou `/sara MM/YYYY`. Quando entrar um novo
+cirurgião ou clínica, adicione com `/addcirurgiao Nome` ou `/addclinica Nome`.
+
+> A base de cálculo padrão é o **valor faturado (bruto)**. Se preferir calcular
+> sobre o **valor recebido** (descontando glosas/pendências), mude `sara.basis`
+> para `"recebido"` no `config.json`.
+
 ## Estrutura da planilha (de cada controle)
 
 | Aba | Conteúdo |
 |---|---|
-| `Registros` | Dados brutos: Data, Paciente, Procedimento, Convênio, Valor, Valor Pago, Glosa, Status, Observações, Registrado_em, ID |
+| `Registros` | Dados brutos: Data, Paciente, Procedimento, Cirurgião, Clínica, Convênio, Valor, Valor Pago, Glosa, Status, Observações, Registrado_em, ID |
 | `Resumo_Mensal` | Por mês: nº de registros, faturado, recebido, glosas, pendente |
 | `Pacientes` | Visão geral: uma linha por paciente com totais e saldo pendente |
+| `Comissao_Sara` | Comissão da Sara por mês (bruto, imposto, líquido, 5%) + lista das cirurgias que contam |
 | `[Nome do Paciente]` | Aba individual criada automaticamente: histórico completo + linha TOTAL |
 
 Todas as abas são criadas automaticamente e recalculadas a cada registro.
 
 ## Comandos
 
-**Consulta:** `/relatorio`, `/mes MM/YYYY`, `/paciente [nome]`, `/pendentes`, `/status`, `/id`, `/ajuda`
+**Consulta:** `/relatorio`, `/mes MM/YYYY`, `/paciente [nome]`, `/pendentes`, `/sara [MM/YYYY]`, `/status`, `/id`, `/ajuda`
 
-**Admin:** `/setprompt [texto]`, `/limparprompt`, `/resetar`
+**Admin — comissão da Sara:** `/saraconfig`, `/addcirurgiao [nome]`, `/delcirurgiao [nome]`, `/addclinica [nome]`, `/delclinica [nome]`
+
+**Admin — geral:** `/setprompt [texto]`, `/limparprompt`, `/resetar`
 
 `/id` mostra o ID do grupo atual — use para descobrir os IDs na hora de configurar.
 

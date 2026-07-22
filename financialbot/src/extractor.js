@@ -52,6 +52,8 @@ const EXTRACTION_SCHEMA = {
     paciente: { type: ['string', 'null'], description: 'Nome do paciente' },
     data: { type: ['string', 'null'], description: 'Data do atendimento no formato DD/MM/YYYY' },
     procedimento: { type: ['string', 'null'], description: 'Procedimento/atendimento, se citado' },
+    cirurgiao: { type: ['string', 'null'], description: 'Nome do cirurgião responsável, se citado (ex: "Dr. Raphael Datrino")' },
+    clinica: { type: ['string', 'null'], description: 'Clínica ou hospital onde a cirurgia foi feita, se citado (ex: "Clínica Dat Baby"). NÃO é o convênio.' },
     convenio: { type: ['string', 'null'], description: 'Convênio ou "Particular", se citado' },
     valor: { type: ['number', 'null'], description: 'Valor total cobrado, em reais (número)' },
     status_pagamento: {
@@ -64,8 +66,9 @@ const EXTRACTION_SCHEMA = {
     observacoes: { type: ['string', 'null'], description: 'Observações relevantes (motivo da glosa, forma de pagamento etc.)' },
   },
   required: [
-    'e_registro', 'tipo', 'paciente', 'data', 'procedimento', 'convenio',
-    'valor', 'status_pagamento', 'valor_pago', 'valor_glosado', 'observacoes',
+    'e_registro', 'tipo', 'paciente', 'data', 'procedimento', 'cirurgiao',
+    'clinica', 'convenio', 'valor', 'status_pagamento', 'valor_pago',
+    'valor_glosado', 'observacoes',
   ],
   additionalProperties: false,
 };
@@ -89,7 +92,9 @@ function buildSystemPrompt() {
     '',
     'Regras:',
     '- Extraia: paciente, data, valor total, status de pagamento e, se citados, procedimento,',
-    '  convênio, valor pago, valor glosado e observações.',
+    '  cirurgião, clínica/hospital, convênio, valor pago, valor glosado e observações.',
+    '- cirurgiao: nome do cirurgião (ex: "Dr. Raphael Datrino"). clinica: onde a cirurgia foi',
+    '  feita (ex: "Clínica Dat Baby"). Não confunda clínica com convênio (plano de saúde).',
     '- Converta datas relativas ("hoje", "ontem", "segunda", "15/07") para DD/MM/YYYY completo.',
     '  Datas sem ano referem-se ao ano corrente; dias da semana, à ocorrência mais recente.',
     '- Valores em reais como número: "R$3.000" → 3000; "2.850,50" → 2850.5; "3 mil" → 3000.',

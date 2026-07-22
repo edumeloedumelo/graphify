@@ -26,7 +26,16 @@ const CONFIG_PATH = path.join(STATE_DIR, 'config.json');
 const STATE_PATH = path.join(STATE_DIR, 'state.json');
 const SEED_CONFIG_PATH = path.join(PROJECT_DIR, 'config.json');
 
-const DEFAULT_CONFIG = { extraPrompt: '' };
+const DEFAULT_CONFIG = {
+  extraPrompt: '',
+  sara: {
+    commissionRate: 0.05,
+    taxRate: 0.20,
+    basis: 'faturado',
+    surgeons: ['Raphael Datrino', 'Gustavo Siqueira'],
+    clinics: ['Clínica Dat Baby'],
+  },
+};
 const DEFAULT_STATE = { processedIds: [], lastSync: null, pending: {} };
 
 function readJson(file, fallback) {

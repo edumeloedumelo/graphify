@@ -8,6 +8,7 @@ import { handleCommand, handleResetar } from './commands.js';
 import {
   isFinancialRecord, extractRecord, missingFields, normalizePayment,
 } from './extractor.js';
+import { qualifiesForSara } from './sara.js';
 import { appendRegistro, updatePagamento } from './sheets.js';
 import {
   formatRegistroConfirmado, formatPagamentoAtualizado, formatCamposFaltando,
@@ -39,6 +40,8 @@ async function saveNewRecord(chatId, sender, group, extracted) {
     data: norm.data,
     paciente: norm.paciente,
     procedimento: norm.procedimento,
+    cirurgiao: norm.cirurgiao,
+    clinica: norm.clinica,
     convenio: norm.convenio,
     valor: Number(norm.valor),
     valorPago: norm.valor_pago,
@@ -47,6 +50,7 @@ async function saveNewRecord(chatId, sender, group, extracted) {
     observacoes: norm.observacoes,
     id: crypto.randomUUID().slice(0, 8),
   };
+  registro.contaSara = qualifiesForSara(registro);
 
   console.log(`[router] [${group.name}] registrando ${registro.id}: ${registro.paciente} ${registro.data} (${registro.status})`);
   await appendRegistro(group.spreadsheetId, registro);
