@@ -209,5 +209,15 @@
       "Ignore cabeçalhos, menus, rodapés e totalizadores: só devolva linhas que sejam cirurgias de verdade.",
       "Responda SEMPRE em português do Brasil."
     ]
+  },
+  "sweep": {
+    "ativo": true,
+    "anosDeHistorico": 2,
+    "rotuloFiltro": "Selecione o item",
+    "rotuloPorPagina": "por página",
+    "rotuloResultados": "Mostrando",
+    "maxPaginas": 40,
+    "maxOpcoesFiltro": 10,
+    "esperaMs": 1500
   }
 }
