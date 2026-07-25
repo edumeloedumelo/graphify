@@ -58,20 +58,73 @@ app.get('/salario', (_req, res) => {
   });
 });
 
-// dispara uma varredura fora do horário (útil para cron externo ou teste manual)
-app.post('/sync', (req, res) => {
+/** Dispara uma varredura fora do horário. Responde antes de terminar. */
+function dispararSync(req, res, { html = false } = {}) {
   const secret = process.env.SYNC_SECRET;
   if (secret) {
     const provided = req.get('x-sync-secret') || req.query.secret || req.body?.secret;
-    if (provided !== secret) return res.status(401).json({ error: 'segredo invalido' });
+    if (provided !== secret) {
+      return html ? res.status(401).send(pagina('Segredo inválido', '')) : res.status(401).json({ error: 'segredo invalido' });
+    }
   }
 
-  if (isSyncRunning()) return res.status(409).json({ error: 'sincronizacao ja em andamento' });
+  const jaRodando = isSyncRunning();
+  if (!jaRodando) runSync({ trigger: 'http' }).catch((err) => console.error('[/sync] erro:', err));
 
-  res.status(202).json({ started: true });
-  runSync({ trigger: 'http' }).catch((err) => console.error('[/sync] erro:', err));
-  return undefined;
-});
+  if (!html) {
+    return jaRodando
+      ? res.status(409).json({ error: 'sincronizacao ja em andamento' })
+      : res.status(202).json({ started: true });
+  }
+
+  return res.status(jaRodando ? 409 : 202).send(
+    pagina(
+      jaRodando ? 'Já tem uma varredura rodando' : 'Varredura iniciada',
+      jaRodando
+        ? 'Aguarde ela terminar antes de disparar outra.'
+        : 'Ela roda em segundo plano e leva alguns minutos. Volte aqui depois para ver o resultado.',
+    ),
+  );
+}
+
+/** Página simples, legível no celular. */
+function pagina(titulo, texto) {
+  const info = lastSyncInfo();
+  const linhas = info
+    ? [
+        `Última varredura: ${info.at || '—'}`,
+        info.error ? `Erro: ${info.error}` : `Cirurgias lidas: ${info.casesFound ?? '—'}`,
+        info.error ? '' : `Novas: ${info.added ?? 0} · Atualizadas: ${info.updated ?? 0}`,
+        info.error ? '' : `Páginas visitadas: ${info.pagesVisited ?? '—'}`,
+        (info.warnings || []).length ? `Avisos: ${info.warnings.join(' | ')}` : '',
+      ].filter(Boolean)
+    : ['Nenhuma varredura registrada ainda.'];
+
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>${titulo}</title>
+<style>
+ body{font-family:-apple-system,system-ui,sans-serif;margin:0;padding:24px;background:#0f172a;color:#e2e8f0;line-height:1.6}
+ h1{font-size:20px;margin:0 0 8px}
+ p{margin:0 0 20px;color:#94a3b8}
+ ul{list-style:none;padding:0;margin:0 0 24px;background:#1e293b;border-radius:12px;padding:16px}
+ li{padding:4px 0;font-size:15px;word-break:break-word}
+ a{display:block;text-align:center;background:#2563eb;color:#fff;text-decoration:none;padding:14px;border-radius:12px;margin-bottom:10px;font-weight:600}
+ a.sec{background:#334155}
+</style></head><body>
+<h1>${titulo}</h1><p>${texto}</p>
+<ul>${linhas.map((l) => `<li>${l}</li>`).join('')}</ul>
+<a href="/varredura">Rodar varredura agora</a>
+<a class="sec" href="/health">Ver diagnóstico completo</a>
+${sheets.sheetUrl() ? `<a class="sec" href="${sheets.sheetUrl()}">Abrir a planilha</a>` : ''}
+</body></html>`;
+}
+
+app.post('/sync', (req, res) => dispararSync(req, res));
+
+// versão para abrir no navegador do celular — GET não dá para fazer com POST
+app.get('/varredura', (req, res) => dispararSync(req, res, { html: true }));
+app.get('/', (_req, res) => res.send(pagina('Coopanest Sync', 'Sincronização do portal com a planilha.')));
 
 app.use((req, res) => res.status(404).json({ error: 'not found', path: req.path }));
 
