@@ -1,0 +1,144 @@
+{
+  "botName": "Coopanest Bot",
+  "timezone": "America/Sao_Paulo",
+
+  "sync": {
+    "intervalMinutes": 60,
+    "runOnBoot": true,
+    "notifyWhenNoChanges": false,
+    "maxChangesPerMessage": 15
+  },
+
+  "coopanest": {
+    "loginUrl": "${COOPANEST_LOGIN_URL}",
+    "casesUrl": "${COOPANEST_CASES_URL}",
+    "username": "${COOPANEST_USER}",
+    "password": "${COOPANEST_PASS}",
+    "selectors": {
+      "username": "input[name='usuario'], input[name='login'], input[type='text']",
+      "password": "input[type='password']",
+      "submit": "button[type='submit'], input[type='submit']",
+      "loggedIn": "a[href*='sair'], a[href*='logout']",
+      "casesTable": "table"
+    },
+    "navigationTimeoutMs": 45000,
+    "extractWithClaude": true,
+    "maxHtmlCharsPerChunk": 45000
+  },
+
+  "doctors": [
+    {
+      "id": "eduardo",
+      "name": "Dr. Eduardo",
+      "aliases": ["eduardo", "eduardo melo", "dr eduardo", "dr. eduardo", "emra"],
+      "chatId": "${CHAT_EDUARDO}"
+    },
+    {
+      "id": "fernanda",
+      "name": "Dra. Fernanda",
+      "aliases": ["fernanda", "dra fernanda", "dra. fernanda"],
+      "chatId": "${CHAT_FERNANDA}"
+    }
+  ],
+
+  "salary": {
+    "beneficiary": "Sara",
+    "taxRate": 0.2,
+    "percentage": 0.05,
+    "partners": [
+      "datbaby",
+      "dat baby",
+      "raphael datrino",
+      "rafael datrino",
+      "datrino",
+      "thiago dantas",
+      "tiago dantas",
+      "thiago",
+      "tiago"
+    ]
+  },
+
+  "sheets": {
+    "casesTab": "Cirurgias",
+    "salaryTab": "Salario Sara",
+    "historyTab": "Historico",
+    "caseColumns": [
+      "ID",
+      "Medico",
+      "Paciente",
+      "Procedimento",
+      "Data",
+      "Hospital",
+      "Convenio",
+      "Status",
+      "Valor Bruto",
+      "Valor Pago",
+      "Valor a Receber",
+      "Glosa",
+      "Recurso de Glosa",
+      "Parceiro/Equipe",
+      "Observacoes",
+      "Primeira Leitura",
+      "Ultima Atualizacao",
+      "Mudancas"
+    ],
+    "salaryColumns": [
+      "Mes",
+      "Qtd Cirurgias",
+      "Valor Bruto",
+      "Imposto (20%)",
+      "Valor Liquido",
+      "Salario Sara (5%)",
+      "Atualizado em"
+    ],
+    "historyColumns": [
+      "Quando",
+      "ID Cirurgia",
+      "Medico",
+      "Paciente",
+      "Campo",
+      "Antes",
+      "Depois"
+    ]
+  },
+
+  "fields": [
+    "paciente",
+    "medico",
+    "procedimento",
+    "data",
+    "hospital",
+    "convenio",
+    "status",
+    "valorBruto",
+    "valorPago",
+    "valorReceber",
+    "glosa",
+    "recursoGlosa",
+    "parceiro",
+    "observacoes"
+  ],
+
+  "watchedFields": [
+    "status",
+    "valorBruto",
+    "valorPago",
+    "valorReceber",
+    "glosa",
+    "recursoGlosa",
+    "data",
+    "procedimento",
+    "convenio"
+  ],
+
+  "prompt": {
+    "role": "Voce e um assistente administrativo de uma equipe de anestesiologia que trabalha com a Coopanest Rio.",
+    "rules": [
+      "Nunca invente dados. Se um campo nao aparece na fonte, devolva string vazia.",
+      "Valores monetarios sempre em numero (ponto como separador decimal), sem R$ e sem separador de milhar.",
+      "Datas sempre no formato DD/MM/AAAA.",
+      "Status deve ser copiado literalmente do portal (ex.: 'Pago', 'Em recurso de glosa', 'Glosado', 'Aguardando faturamento').",
+      "Responda SEMPRE em portugues do Brasil."
+    ]
+  }
+}
