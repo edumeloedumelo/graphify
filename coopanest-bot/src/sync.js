@@ -41,6 +41,7 @@ export async function applyCases(rawCases = []) {
   const warnings = [];
   let sheet = null;
   let salary = null;
+  let resumoPlanilha = null;
 
   if (sheets.sheetsEnabled()) {
     try {
@@ -60,6 +61,7 @@ export async function applyCases(rawCases = []) {
 
       salary = computeSalary(Object.values(merged), cfg);
       await sheets.writeSalary(salary);
+      resumoPlanilha = await sheets.writeSummary();
     } catch (err) {
       warnings.push(`planilha: ${err.message}`);
       console.error('[sync] erro na planilha:', err);
@@ -70,7 +72,7 @@ export async function applyCases(rawCases = []) {
 
   saveSnapshot(merged);
 
-  return { added, updated, unchanged, merged, warnings, sheet, salary };
+  return { added, updated, unchanged, merged, warnings, sheet, salary, resumoPlanilha };
 }
 
 /** Resumo em texto do que mudou — vai para o log e para GET /status. */
@@ -126,6 +128,7 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
     report.updated = applied.updated.length;
     report.unchanged = applied.unchanged.length;
     report.sheet = applied.sheet;
+    report.planilha = applied.resumoPlanilha;
     report.warnings.push(...applied.warnings);
     report.changes = applied.updated.map((item) => ({
       paciente: item.paciente,
@@ -155,6 +158,7 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
       totalLinks: report.totalLinks,
       linksEncontrados: report.linksEncontrados,
       linksIgnorados: report.linksIgnorados,
+      planilha: report.planilha,
     });
 
     console.log(

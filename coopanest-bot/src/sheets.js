@@ -398,6 +398,38 @@ export async function writeSalary(summary) {
   return rows.length;
 }
 
+/**
+ * Confere o que ficou de fato na planilha depois da escrita: nome, URL, abas e
+ * quantas linhas a aba de cirurgias tem. Nunca lanca — e diagnostico.
+ */
+export async function writeSummary() {
+  try {
+    const cfg = getConfig();
+    const client = await getClient();
+    const { data } = await client.spreadsheets.get({ spreadsheetId: spreadsheetId() });
+
+    let linhasCirurgias = 0;
+    try {
+      const { data: valores } = await client.spreadsheets.values.get({
+        spreadsheetId: spreadsheetId(),
+        range: `${cfg.sheets.casesTab}!A:A`,
+      });
+      linhasCirurgias = Math.max(0, (valores.values || []).length - 1); // tira o cabecalho
+    } catch {
+      linhasCirurgias = -1;
+    }
+
+    return {
+      planilha: data.properties?.title || '',
+      url: sheetUrl(),
+      abas: (data.sheets || []).map((sheet) => sheet.properties.title),
+      linhasCirurgias,
+    };
+  } catch (err) {
+    return { erro: err.message };
+  }
+}
+
 function round2(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
