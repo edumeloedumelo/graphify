@@ -81,7 +81,15 @@
       "honorario",
       "honorário",
       "pagamento"
-    ]
+    ],
+    "contentSelectors": [
+      "table",
+      "[role='table']",
+      "[role='grid']",
+      "[class*='ataGrid']",
+      "[class*='table']"
+    ],
+    "contentTimeoutMs": 8000
   },
   "doctors": [
     {

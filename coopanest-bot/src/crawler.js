@@ -137,9 +137,20 @@ async function findNextControl(page, selectors = []) {
   return null;
 }
 
-async function settle(page, timeout, waitMs) {
+async function settle(page, timeout, waitMs, crawl = {}) {
   await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
   if (waitMs > 0) await page.waitForTimeout(waitMs);
+
+  // Em SPA a tabela costuma ser renderizada depois do networkidle: espera ela
+  // aparecer em vez de fotografar a tela ainda vazia.
+  const seletores = (crawl.contentSelectors || []).join(', ');
+  if (seletores) {
+    await page
+      .locator(seletores)
+      .first()
+      .waitFor({ state: 'visible', timeout: crawl.contentTimeoutMs ?? 8000 })
+      .catch(() => {});
+  }
 }
 
 /**
@@ -175,7 +186,7 @@ async function readWithPagination(page, url, { crawl, timeout, onPage }) {
     try {
       await next.click({ timeout: 10_000 });
       clicks += 1;
-      await settle(page, timeout, crawl.waitAfterLoadMs ?? 800);
+      await settle(page, timeout, crawl.waitAfterLoadMs ?? 800, crawl);
     } catch {
       break;
     }
@@ -226,7 +237,7 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
         warnings.push(`${url} respondeu ${response.status()}`);
         continue;
       }
-      await settle(page, timeout, crawl.waitAfterLoadMs ?? 800);
+      await settle(page, timeout, crawl.waitAfterLoadMs ?? 800, crawl);
     } catch (err) {
       warnings.push(`falha abrindo ${url}: ${err.message}`);
       continue;
