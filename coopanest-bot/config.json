@@ -1,17 +1,16 @@
 {
   "botName": "Coopanest Sync",
   "timezone": "America/Sao_Paulo",
-
   "sync": {
     "intervalMinutes": 60,
     "runOnBoot": true
   },
-
   "coopanest": {
     "loginUrl": "${COOPANEST_LOGIN_URL}",
     "casesUrl": "${COOPANEST_CASES_URL}",
     "username": "${COOPANEST_USER}",
     "password": "${COOPANEST_PASS}",
+    "userType": "${COOPANEST_USER_TYPE}",
     "selectors": {
       "username": "input[name='usuario'], input[name='login'], input[type='text']",
       "password": "input[type='password']",
@@ -21,7 +20,6 @@
     "navigationTimeoutMs": 45000,
     "maxHtmlCharsPerChunk": 45000
   },
-
   "crawl": {
     "maxPages": 60,
     "maxDepth": 3,
@@ -85,20 +83,28 @@
       "pagamento"
     ]
   },
-
   "doctors": [
     {
       "id": "eduardo",
       "name": "Dr. Eduardo",
-      "aliases": ["eduardo", "eduardo melo", "dr eduardo", "dr. eduardo", "emra"]
+      "aliases": [
+        "eduardo",
+        "eduardo melo",
+        "dr eduardo",
+        "dr. eduardo",
+        "emra"
+      ]
     },
     {
       "id": "fernanda",
       "name": "Dra. Fernanda",
-      "aliases": ["fernanda", "dra fernanda", "dra. fernanda"]
+      "aliases": [
+        "fernanda",
+        "dra fernanda",
+        "dra. fernanda"
+      ]
     }
   ],
-
   "salary": {
     "beneficiary": "Sara",
     "taxRate": 0.2,
@@ -115,7 +121,6 @@
       "tiago"
     ]
   },
-
   "sheets": {
     "casesTab": "Cirurgias",
     "salaryTab": "Salario Sara",
@@ -159,7 +164,6 @@
       "Depois"
     ]
   },
-
   "fields": [
     "paciente",
     "medico",
@@ -176,7 +180,6 @@
     "parceiro",
     "observacoes"
   ],
-
   "watchedFields": [
     "status",
     "valorBruto",
@@ -188,7 +191,6 @@
     "procedimento",
     "convenio"
   ],
-
   "prompt": {
     "role": "Você é um assistente administrativo de uma equipe de anestesiologia que trabalha com a Coopanest Rio.",
     "rules": [

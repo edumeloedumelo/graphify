@@ -25,6 +25,18 @@ const cenarios = {
       <input name="matricula" type="text"/>
       <input name="pwd" type="password"/>
     </form>`,
+  // réplica do portal real: escolha de tipo de usuário + campo CRM.
+  // Sem marcar o tipo, o servidor responde "Usuário ou senha Inválido".
+  coopanest: `<h2>Entre na plataforma da Coopanest Rio</h2>
+    <form method="POST" action="/login">
+      <p>Selecione o tipo de usuário que deseja entrar</p>
+      <label><input type="radio" name="tipo" value="cooperado"/> Cooperado</label>
+      <label><input type="radio" name="tipo" value="administrador"/> Administrador</label>
+      <input name="crm" type="text" placeholder="CRM"/>
+      <input name="senha" type="password" placeholder="Senha"/>
+      <button type="submit">Entrar na plataforma</button>
+      <a href="/esqueci">Esqueceu a senha?</a>
+    </form>`,
   // campo escondido antes do real, para conferir que ele é ignorado
   comCampoOculto: `<form method="POST" action="/login">
       <input name="fake" type="text" style="display:none"/>
@@ -48,11 +60,23 @@ const portal = http.createServer((req, res) => {
 
     if (url.pathname === '/login' && req.method === 'POST') {
       const params = new URLSearchParams(body);
-      recebido = { usuario: '', senha: '' };
+      recebido = { usuario: '', senha: '', tipo: params.get('tipo') || '' };
       for (const [key, value] of params) {
         if (/senha|pwd|pass/i.test(key)) recebido.senha = value;
+        else if (/tipo/i.test(key)) continue;
         else if (value) recebido.usuario = value;
       }
+
+      // igual ao portal real: sem tipo de usuário, recusa o login
+      if (cenarioAtual === 'coopanest' && !recebido.tipo) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(
+          `<html><body><h1>Coopanest</h1>${cenarios[cenarioAtual]}` +
+            '<p>Não foi possível logar. Usuário ou senha Inválido</p></body></html>',
+        );
+        return;
+      }
+
       res.writeHead(302, { location: '/painel', 'set-cookie': 'sessao=ok; Path=/' });
       res.end();
       return;
@@ -78,7 +102,7 @@ const port = portal.address().port;
 
 process.env.STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'coopanest-login-'));
 process.env.COOPANEST_LOGIN_URL = `http://127.0.0.1:${port}/login`;
-process.env.COOPANEST_USER = 'dr.eduardo';
+process.env.COOPANEST_USER = '52561';
 process.env.COOPANEST_PASS = 'segredo123';
 process.env.ANTHROPIC_API_KEY = 'nao-usada-neste-teste';
 
@@ -109,6 +133,7 @@ async function check(nome, cenario, esperado) {
     assert.ok(recebido, `o formulario nao foi enviado (avisos: ${warnings.join('; ')})`);
     assert.equal(recebido.usuario, esperado.usuario);
     assert.equal(recebido.senha, esperado.senha);
+    if (esperado.tipo) assert.equal(recebido.tipo, esperado.tipo, 'tipo de usuario nao foi marcado');
     console.log(`  ok  ${nome}`);
   } catch (err) {
     failures.push(nome);
@@ -119,23 +144,29 @@ async function check(nome, cenario, esperado) {
 console.log('\ndeteccao automatica do formulario de login\n');
 
 await check('campos com nomes inesperados e botao sem type=submit', 'incomum', {
-  usuario: 'dr.eduardo',
+  usuario: '52561',
   senha: 'segredo123',
 });
 await check('formulario sem botao (envia com Enter)', 'semBotao', {
-  usuario: 'dr.eduardo',
+  usuario: '52561',
   senha: 'segredo123',
 });
 await check('ignora campo de texto escondido', 'comCampoOculto', {
-  usuario: 'dr.eduardo',
+  usuario: '52561',
   senha: 'segredo123',
+});
+
+await check('portal da Coopanest: marca o tipo de usuario e preenche o CRM', 'coopanest', {
+  usuario: '52561',
+  senha: 'segredo123',
+  tipo: 'cooperado',
 });
 
 // o seletor 'loggedIn' e um chute: se o portal nao tiver link de logout, o login
 // ainda tem que ser dado como bem-sucedido (senao e falso negativo)
 painelSemLogout = true;
 await check('area logada sem link "Sair" nao e tratada como falha', 'incomum', {
-  usuario: 'dr.eduardo',
+  usuario: '52561',
   senha: 'segredo123',
 });
 painelSemLogout = false;

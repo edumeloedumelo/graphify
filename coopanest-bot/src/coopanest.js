@@ -101,7 +101,10 @@ async function autoDetectLoginForm(page) {
     const usuario = inputs
       .slice(0, indice === -1 ? inputs.length : indice)
       .reverse()
-      .find((input) => visivel(input) && ['text', 'email', 'tel', ''].includes((input.type || '').toLowerCase()));
+      .find(
+        (input) =>
+          visivel(input) && ['text', 'email', 'tel', 'number', 'search', ''].includes((input.type || '').toLowerCase()),
+      );
 
     const enviar =
       form.querySelector('button[type="submit"], input[type="submit"]') ||
@@ -117,6 +120,59 @@ async function autoDetectLoginForm(page) {
   });
 }
 
+/**
+ * Marca o tipo de usuário antes de logar (o portal da Coopanest pede
+ * "Cooperado" ou "Administrador"). Cobre rádio, select e aba/botão clicável.
+ */
+async function selectUserType(page, label) {
+  if (!label) return null;
+  const alvo = String(label).toLowerCase().trim();
+
+  const achado = await page.evaluate((termo) => {
+    const textoDe = (element) => {
+      const rotuloPor = element.id ? document.querySelector(`label[for="${CSS.escape(element.id)}"]`) : null;
+      const rotuloPai = element.closest('label');
+      return `${element.value || ''} ${rotuloPor?.innerText || ''} ${rotuloPai?.innerText || ''}`.toLowerCase();
+    };
+
+    const radio = [...document.querySelectorAll('input[type="radio"]')].find((item) =>
+      textoDe(item).includes(termo),
+    );
+    if (radio) {
+      radio.setAttribute('data-coopanest', 'tipo');
+      return { via: 'radio', jaMarcado: radio.checked };
+    }
+
+    for (const select of document.querySelectorAll('select')) {
+      const opcao = [...select.options].find((item) =>
+        `${item.text} ${item.value}`.toLowerCase().includes(termo),
+      );
+      if (opcao) {
+        select.value = opcao.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        return { via: 'select' };
+      }
+    }
+
+    const clicavel = [...document.querySelectorAll('button, a, [role="tab"], li, div')].find(
+      (item) => (item.innerText || '').trim().toLowerCase() === termo && item.offsetParent !== null,
+    );
+    if (clicavel) {
+      clicavel.setAttribute('data-coopanest', 'tipo');
+      return { via: 'clique' };
+    }
+
+    return null;
+  }, alvo);
+
+  if (!achado) return null;
+  if (achado.via !== 'select') {
+    // clique de verdade: frameworks precisam dos eventos, não basta marcar o checked
+    await page.locator('[data-coopanest="tipo"]').first().click({ timeout: 5000 }).catch(() => {});
+  }
+  return achado;
+}
+
 async function performLogin(page, cfg) {
   const { loginUrl, username, password, selectors, navigationTimeoutMs } = cfg.coopanest;
   if (!loginUrl) throw new Error('COOPANEST_LOGIN_URL nao configurada');
@@ -130,6 +186,11 @@ async function performLogin(page, cfg) {
     log('sessao anterior ainda valida');
     return;
   }
+
+  const tipoUsuario = cfg.coopanest.userType || 'Cooperado';
+  const tipoMarcado = await selectUserType(page, tipoUsuario);
+  if (tipoMarcado) log(`tipo de usuario "${tipoUsuario}" marcado (via ${tipoMarcado.via})`);
+  else log(`nao achei a opcao de tipo de usuario "${tipoUsuario}" — seguindo sem marcar`);
 
   let userField = await visibleLocator(page, selectors.username);
   let passField = await visibleLocator(page, selectors.password);
