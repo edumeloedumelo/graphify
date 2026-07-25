@@ -49,6 +49,7 @@ const cenarios = {
 let cenarioAtual = 'incomum';
 let recebido = null;
 let painelSemLogout = false;
+let painelComLoginMontado = false;
 
 const portal = http.createServer((req, res) => {
   let body = '';
@@ -87,8 +88,14 @@ const portal = http.createServer((req, res) => {
       const menu = painelSemLogout
         ? '<button onclick="encerrar()">Encerrar sessão</button>'
         : '<a href="/logout">Sair</a>';
+      // painelComLoginMontado: igual ao portal real, que deixa o formulario de
+      // login no DOM mesmo depois de entrar
+      const resto = painelComLoginMontado ? cenarios.coopanest : '';
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(`<html><body>${menu}<h1>Painel</h1><p>Bem-vindo, Dr. Eduardo.</p></body></html>`);
+      res.end(
+        `<html><head><title>Home</title></head><body>${menu}<h1>Painel</h1>` +
+          `<p>Bem-vindo EDUARDO MELO RODRIGUES DE ALMEIDA</p>${resto}</body></html>`,
+      );
       return;
     }
 
@@ -170,6 +177,18 @@ await check('area logada sem link "Sair" nao e tratada como falha', 'incomum', {
   senha: 'segredo123',
 });
 painelSemLogout = false;
+
+// o portal deixa o formulario de login montado depois do login: o campo de
+// senha continua visivel e nao pode ser lido como "login falhou"
+painelSemLogout = true;
+painelComLoginMontado = true;
+await check('area logada que ainda mostra o formulario de login', 'coopanest', {
+  usuario: '52561',
+  senha: 'segredo123',
+  tipo: 'cooperado',
+});
+painelSemLogout = false;
+painelComLoginMontado = false;
 
 console.log(`\n${failures.length === 0 ? 'todos os passos ok' : `${failures.length} falha(s)`}\n`);
 

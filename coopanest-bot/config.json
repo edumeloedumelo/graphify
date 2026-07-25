@@ -15,7 +15,8 @@
       "username": "input[name='usuario'], input[name='login'], input[type='text']",
       "password": "input[type='password']",
       "submit": "button[type='submit'], input[type='submit']",
-      "loggedIn": "a[href*='sair'], a[href*='logout']"
+      "loggedIn": "a[href*='sair'], a[href*='logout']",
+      "loggedInText": "Bem-vindo"
     },
     "navigationTimeoutMs": 45000,
     "maxHtmlCharsPerChunk": 45000

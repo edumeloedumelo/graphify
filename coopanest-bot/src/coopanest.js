@@ -39,20 +39,44 @@ function saveSession(state) {
   }
 }
 
+/** Mesma tela? Compara origem + caminho, ignorando barra final e query. */
+function mesmaPagina(a, b) {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const caminho = (url) => url.pathname.replace(/\/$/, '') || '/';
+    return ua.origin === ub.origin && caminho(ua) === caminho(ub);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Está logado? Dois sinais, porque o seletor configurado é um chute:
- * 1. o seletor de "área logada" (link Sair, por exemplo) aparece na página; ou
- * 2. não há mais campo de senha visível — sinal de que saímos da tela de login.
- * O segundo evita o falso negativo de um portal cujo link de sair não bate com o seletor.
+ * Está logado? Quatro sinais, do mais confiável para o menos.
+ *
+ * O portal da Coopanest mantém o formulário de login montado no DOM depois de
+ * entrar — "ainda vejo campo de senha" sozinho dava falso negativo mesmo com o
+ * login tendo funcionado e a página já mostrando "Bem-vindo <nome>".
  */
-async function looksLoggedIn(page, selectors) {
+async function looksLoggedIn(page, selectors, { loginUrl } = {}) {
   if (selectors.loggedIn) {
     try {
       if ((await page.locator(selectors.loggedIn).count()) > 0) return true;
     } catch {
-      // seletor inválido para esta página: cai no segundo sinal
+      // seletor inválido para esta página: tenta os próximos sinais
     }
   }
+
+  if (selectors.loggedInText) {
+    const tem = await page
+      .evaluate((termo) => (document.body?.innerText || '').includes(termo), selectors.loggedInText)
+      .catch(() => false);
+    if (tem) return true;
+  }
+
+  // saiu da tela de login (ex.: caiu em /app/home)
+  if (loginUrl && !mesmaPagina(page.url(), loginUrl)) return true;
+
   return !(await visibleLocator(page, 'input[type="password"]'));
 }
 
@@ -224,7 +248,7 @@ async function performLogin(page, cfg) {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
   await page.waitForLoadState('networkidle', { timeout: navigationTimeoutMs }).catch(() => {});
 
-  if (await looksLoggedIn(page, selectors)) {
+  if (await looksLoggedIn(page, selectors, { loginUrl })) {
     log('sessao anterior ainda valida');
     return;
   }
@@ -283,7 +307,7 @@ async function performLogin(page, cfg) {
     await page.waitForTimeout(2000);
   }
 
-  if (!(await looksLoggedIn(page, selectors))) {
+  if (!(await looksLoggedIn(page, selectors, { loginUrl }))) {
     const snap = await pageSnapshot(page);
     throw new Error(
       `login nao confirmado em ${snap.url} (titulo: "${snap.titulo}"). ` +
