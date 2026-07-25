@@ -79,6 +79,7 @@ coopanest-bot/
     e2e-sync.js           portal falso multi-página, ponta a ponta
     sync-once.js          roda uma varredura pelo terminal
     scrape-debug.js       mostra o que o crawler vê, sem gastar IA
+    check-sheets.js       confere o acesso à planilha e diz o que está errado
     check-syntax.js       node --check em tudo
 ```
 
@@ -124,6 +125,14 @@ CRAWL_MAX_PAGES=60             CRAWL_MAX_DEPTH=3
 5. `GOOGLE_SHEET_ID` é o trecho da URL: `docs.google.com/spreadsheets/d/`**`ESTE_PEDAÇO`**`/edit`
 
 As três abas (`Cirurgias`, `Salario Sara`, `Historico`) são criadas sozinhas na primeira execução.
+
+Para conferir antes de subir (com `GOOGLE_SHEET_ID` e `GOOGLE_SERVICE_ACCOUNT_JSON` no `.env`):
+
+```bash
+npm run check-sheets
+```
+
+Ele diz exatamente o que falta: JSON inválido, ID errado, planilha não compartilhada ou service account só com permissão de leitura.
 
 ---
 
