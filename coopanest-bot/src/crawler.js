@@ -29,21 +29,28 @@ export function sameOrigin(a, b) {
  * Decide se um link entra na fila.
  * O logout é o link mais perigoso do portal: clicar nele derruba a sessão no meio da varredura.
  */
-export function shouldVisit(url, { origin, skipPatterns = [], visited = new Set(), sameOriginOnly = true }) {
+export function motivoIgnorar(url, { origin, skipPatterns = [], sameOriginOnly = true } = {}) {
   const normalized = normalizeUrl(url);
-  if (!normalized) return false;
-  if (!/^https?:/i.test(normalized)) return false;
-  if (visited.has(normalized)) return false;
-  if (sameOriginOnly && origin && !sameOrigin(normalized, origin)) return false;
+  if (!normalized) return 'nao e uma URL';
+  if (!/^https?:/i.test(normalized)) return 'nao e http(s)';
+  if (sameOriginOnly && origin && !sameOrigin(normalized, origin)) return 'outro dominio';
 
   const lower = normalized.toLowerCase();
-  return !skipPatterns.some((pattern) => {
+  const bloqueio = skipPatterns.find((pattern) => {
     try {
       return new RegExp(pattern, 'i').test(lower);
     } catch {
       return lower.includes(pattern.toLowerCase());
     }
   });
+  return bloqueio ? `bloqueado por "${bloqueio}"` : null;
+}
+
+export function shouldVisit(url, { origin, skipPatterns = [], visited = new Set(), sameOriginOnly = true }) {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return false;
+  if (visited.has(normalized)) return false;
+  return motivoIgnorar(normalized, { origin, skipPatterns, sameOriginOnly }) === null;
 }
 
 /** A página parece ter dados de cirurgia? Evita gastar IA com menu, ajuda e afins. */
@@ -200,6 +207,8 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
   const fingerprints = new Set();
   const collected = [];
   const warnings = [];
+  const linksVistos = new Set();
+  const linksIgnorados = new Map();
 
   const queue = seeds
     .map((url) => normalizeUrl(url))
@@ -244,9 +253,15 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
     if (depth >= maxDepth) continue;
 
     for (const link of links) {
-      if (!shouldVisit(link.href, { origin, skipPatterns, visited, sameOriginOnly })) continue;
       const normalized = normalizeUrl(link.href);
-      if (queue.some((item) => item.url === normalized)) continue;
+      if (normalized) linksVistos.add(normalized);
+
+      const motivo = motivoIgnorar(normalized || link.href, { origin, skipPatterns, sameOriginOnly });
+      if (motivo) {
+        linksIgnorados.set(normalized || link.href, motivo);
+        continue;
+      }
+      if (visited.has(normalized) || queue.some((item) => item.url === normalized)) continue;
       queue.push({ url: normalized, depth: depth + 1 });
     }
   }
@@ -255,5 +270,13 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
     warnings.push(`limite de ${maxPages} páginas atingido; ${queue.length} link(s) ficaram de fora`);
   }
 
-  return { pages: collected, warnings, visited: [...visited] };
+  return {
+    pages: collected,
+    warnings,
+    visited: [...visited],
+    // diagnostico: o que existe de link na pagina e por que cada um ficou de fora
+    linksEncontrados: [...linksVistos].slice(0, 25),
+    totalLinks: linksVistos.size,
+    linksIgnorados: [...linksIgnorados.entries()].slice(0, 12).map(([url, motivo]) => `${url} → ${motivo}`),
+  };
 }

@@ -336,6 +336,7 @@ export async function scrapeCases({ debug = false } = {}) {
   let pages = [];
   const warnings = [];
   let visited = [];
+  let diagnosticoLinks = {};
 
   try {
     const page = await context.newPage();
@@ -349,6 +350,11 @@ export async function scrapeCases({ debug = false } = {}) {
     pages = result.pages;
     visited = result.visited;
     warnings.push(...result.warnings);
+    diagnosticoLinks = {
+      totalLinks: result.totalLinks,
+      linksEncontrados: result.linksEncontrados,
+      linksIgnorados: result.linksIgnorados,
+    };
 
     log(`varredura terminou: ${visited.length} URL(s) visitada(s), ${pages.length} pagina(s) com conteudo`);
   } finally {
@@ -356,7 +362,7 @@ export async function scrapeCases({ debug = false } = {}) {
     await browser.close().catch(() => {});
   }
 
-  if (debug) return { cases: [], warnings, pages, visited };
+  if (debug) return { cases: [], warnings, pages, visited, ...diagnosticoLinks };
 
   // só as páginas que parecem ter dados vão para a IA
   const keywords = cfg.crawl?.dataKeywords || [];
@@ -381,5 +387,6 @@ export async function scrapeCases({ debug = false } = {}) {
     pages: pages.map((item) => item.url),
     visited,
     pagesAnalyzed: withData.length,
+    ...diagnosticoLinks,
   };
 }

@@ -117,6 +117,9 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
     report.pagesVisited = scraped.visited?.length || 0;
     report.pagesAnalyzed = scraped.pagesAnalyzed || 0;
     report.casesFound = scraped.cases.length;
+    report.totalLinks = scraped.totalLinks;
+    report.linksEncontrados = scraped.linksEncontrados;
+    report.linksIgnorados = scraped.linksIgnorados;
 
     const applied = await applyCases(scraped.cases);
     report.added = applied.added.length;
@@ -149,6 +152,9 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
       casesFound: report.casesFound,
       durationSeconds: report.durationSeconds,
       warnings: report.warnings,
+      totalLinks: report.totalLinks,
+      linksEncontrados: report.linksEncontrados,
+      linksIgnorados: report.linksIgnorados,
     });
 
     console.log(
