@@ -56,17 +56,59 @@ async function looksLoggedIn(page, selectors) {
   return !(await visibleLocator(page, 'input[type="password"]'));
 }
 
-/** Título, URL e um trecho do texto da página — para o erro dizer o que o portal respondeu. */
+/**
+ * Título, texto e a estrutura do formulário — para o erro dizer o que o portal
+ * respondeu e quais campos existem de verdade. Nunca inclui valores digitados.
+ */
 async function pageSnapshot(page) {
   try {
-    const info = await page.evaluate(() => ({
-      titulo: document.title || '',
-      texto: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400),
-    }));
+    const info = await page.evaluate(() => {
+      const campos = [...document.querySelectorAll('input, select, textarea')]
+        .filter((element) => element.type !== 'hidden')
+        .map((element) => {
+          const partes = [element.tagName.toLowerCase()];
+          if (element.type) partes.push(`type=${element.type}`);
+          if (element.name) partes.push(`name=${element.name}`);
+          if (element.id) partes.push(`id=${element.id}`);
+          if (element.placeholder) partes.push(`placeholder="${element.placeholder}"`);
+          if (element.tagName === 'SELECT') {
+            partes.push(`opcoes=[${[...element.options].map((o) => o.text.trim()).join('|')}]`);
+          }
+          if (element.type === 'radio' || element.type === 'checkbox') {
+            partes.push(`valor=${element.value}`, element.checked ? 'MARCADO' : 'desmarcado');
+          }
+          if (element.offsetParent === null) partes.push('OCULTO');
+          return partes.join(' ');
+        });
+
+      const botoes = [...document.querySelectorAll('button, input[type=submit], [role=button]')]
+        .map((element) => (element.innerText || element.value || '').trim())
+        .filter(Boolean);
+
+      return {
+        titulo: document.title || '',
+        texto: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+        campos,
+        botoes,
+      };
+    });
     return { url: page.url(), ...info };
   } catch {
-    return { url: page.url(), titulo: '', texto: '' };
+    return { url: page.url(), titulo: '', texto: '', campos: [], botoes: [] };
   }
+}
+
+/**
+ * Preenche um campo e confere se o valor grudou. Alguns portais em React
+ * ignoram o preenchimento programático — nesses, digita tecla a tecla.
+ */
+async function fillField(locator, value) {
+  await locator.fill(value).catch(() => {});
+  if ((await locator.inputValue().catch(() => '')) === value) return true;
+
+  await locator.click({ timeout: 5000 }).catch(() => {});
+  await locator.pressSequentially(String(value), { delay: 40 }).catch(() => {});
+  return (await locator.inputValue().catch(() => '')) === value;
 }
 
 /** Devolve o primeiro elemento visível do seletor, ou null se não existir. */
@@ -195,6 +237,7 @@ async function performLogin(page, cfg) {
   let userField = await visibleLocator(page, selectors.username);
   let passField = await visibleLocator(page, selectors.password);
   let submitButton = await visibleLocator(page, selectors.submit);
+  let usuarioDetectado = userField ? 'seletor do config' : '';
 
   // seletores do config não bateram: acha o formulário pelo campo de senha
   if (!userField || !passField) {
@@ -205,6 +248,7 @@ async function performLogin(page, cfg) {
       );
     }
     log(`seletores do config nao bateram; usei o formulario detectado na pagina (${detected.campos} campo(s))`);
+    usuarioDetectado = `autodeteccao (${detected.campos} campos no form)`;
     passField = page.locator('[data-coopanest="senha"]').first();
     if (detected.usuario) userField = page.locator('[data-coopanest="usuario"]').first();
     if (detected.enviar) submitButton = page.locator('[data-coopanest="enviar"]').first();
@@ -212,8 +256,11 @@ async function performLogin(page, cfg) {
 
   if (!userField) throw new Error('achei o campo de senha mas nao o de usuario — ajuste coopanest.selectors.username');
 
-  await userField.fill(username);
-  await passField.fill(password);
+  const usuarioOk = await fillField(userField, username);
+  const senhaOk = await fillField(passField, password);
+  if (!usuarioOk || !senhaOk) {
+    log(`atencao: campo ${!usuarioOk ? 'usuario' : 'senha'} nao aceitou o valor digitado`);
+  }
 
   const urlAntes = page.url();
   await Promise.all([
@@ -239,8 +286,11 @@ async function performLogin(page, cfg) {
   if (!(await looksLoggedIn(page, selectors))) {
     const snap = await pageSnapshot(page);
     throw new Error(
-      `login nao confirmado: continuo vendo campo de senha em ${snap.url} ` +
-        `(titulo: "${snap.titulo}"). A pagina diz: "${snap.texto}"`,
+      `login nao confirmado em ${snap.url} (titulo: "${snap.titulo}"). ` +
+        `A pagina diz: "${snap.texto}" || TIPO DE USUARIO: ${
+          tipoMarcado ? `"${tipoUsuario}" marcado via ${tipoMarcado.via}` : `"${tipoUsuario}" NAO encontrado`
+        } || CAMPO USUARIO: ${usuarioDetectado} || VALORES ACEITOS: usuario=${usuarioOk}, senha=${senhaOk}` +
+        ` || CAMPOS DA PAGINA: ${snap.campos.join(' ;; ')} || BOTOES: ${snap.botoes.join(' | ')}`,
     );
   }
   log(`login confirmado (${page.url()})`);
