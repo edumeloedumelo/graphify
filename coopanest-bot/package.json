@@ -14,7 +14,7 @@
     "scrape": "node scripts/scrape-debug.js",
     "check": "node scripts/check-syntax.js",
     "test": "node scripts/selftest.js",
-    "test:e2e": "node scripts/e2e-sync.js"
+    "test:e2e": "node scripts/e2e-login.js && node scripts/e2e-sync.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

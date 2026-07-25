@@ -75,6 +75,7 @@ coopanest-bot/
     state.js              última varredura (/data/state.json)
   scripts/
     selftest.js           21 testes offline (sem rede)
+    e2e-login.js          detecção automática do formulário de login
     e2e-sync.js           portal falso multi-página, ponta a ponta
     sync-once.js          roda uma varredura pelo terminal
     scrape-debug.js       mostra o que o crawler vê, sem gastar IA
@@ -137,7 +138,7 @@ npm run scrape            # lista as páginas visitadas, marca as que iriam para
 npm run scrape -- --full  # imprime o conteúdo de cada página
 ```
 
-- **Login falhou?** ajuste `coopanest.selectors` (`username`, `password`, `submit`, `loggedIn`).
+- **Login falhou?** o serviço já tenta achar o formulário sozinho quando os seletores não batem (âncora no campo de senha). Se ainda assim falhar, ajuste `coopanest.selectors` (`username`, `password`, `submit`, `loggedIn`).
 - **Faltou página?** aumente `crawl.maxPages` / `crawl.maxDepth`, ou coloque a URL da listagem em `COOPANEST_CASES_URL`.
 - **Página de cirurgias sem a marca `[DADO]`?** acrescente uma palavra em `crawl.dataKeywords` (ou ponha `crawl.onlyPagesWithData: false` para mandar tudo para a IA).
 - **Paginação não avançou?** acrescente o seletor do botão em `crawl.nextPageSelectors`.
@@ -150,7 +151,7 @@ Tudo isso muda em produção **sem redeploy**: o serviço lê `/data/config.over
 
 ```bash
 npm test          # 21 testes offline: crawler, diff, salário, extração, planilha
-npm run test:e2e  # portal falso com menu, paginação, detalhes e armadilha de logout
+npm run test:e2e  # login em formulários fora do padrão + portal falso multi-página
 npm run check     # node --check em todos os arquivos
 ```
 

@@ -48,6 +48,54 @@ async function isLoggedIn(page, selectors) {
   }
 }
 
+/** Devolve o primeiro elemento visível do seletor, ou null se não existir. */
+async function visibleLocator(page, selector) {
+  if (!selector) return null;
+  try {
+    const locator = page.locator(selector).first();
+    if ((await locator.count()) === 0) return null;
+    if (!(await locator.isVisible())) return null;
+    return locator;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Acha o formulário de login sozinho, quando os seletores do config não batem.
+ * Âncora: o campo de senha visível. O usuário é o input de texto logo antes dele,
+ * no mesmo formulário. Marca os elementos para o Playwright poder preenchê-los.
+ */
+async function autoDetectLoginForm(page) {
+  return page.evaluate(() => {
+    const visivel = (element) => element && element.offsetParent !== null && !element.disabled;
+
+    const senha = [...document.querySelectorAll('input[type="password"]')].find(visivel);
+    if (!senha) return null;
+
+    const form = senha.form || document.body;
+    const inputs = [...form.querySelectorAll('input')];
+    const indice = inputs.indexOf(senha);
+
+    const usuario = inputs
+      .slice(0, indice === -1 ? inputs.length : indice)
+      .reverse()
+      .find((input) => visivel(input) && ['text', 'email', 'tel', ''].includes((input.type || '').toLowerCase()));
+
+    const enviar =
+      form.querySelector('button[type="submit"], input[type="submit"]') ||
+      [...form.querySelectorAll('button, a')].find((element) =>
+        /entrar|acessar|login|conectar|enviar/i.test(element.innerText || element.value || ''),
+      );
+
+    senha.setAttribute('data-coopanest', 'senha');
+    if (usuario) usuario.setAttribute('data-coopanest', 'usuario');
+    if (enviar) enviar.setAttribute('data-coopanest', 'enviar');
+
+    return { usuario: Boolean(usuario), enviar: Boolean(enviar), campos: inputs.length };
+  });
+}
+
 async function performLogin(page, cfg) {
   const { loginUrl, username, password, selectors, navigationTimeoutMs } = cfg.coopanest;
   if (!loginUrl) throw new Error('COOPANEST_LOGIN_URL nao configurada');
@@ -55,20 +103,56 @@ async function performLogin(page, cfg) {
 
   log('abrindo tela de login');
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
+  await page.waitForLoadState('networkidle', { timeout: navigationTimeoutMs }).catch(() => {});
 
   if (await isLoggedIn(page, selectors)) {
     log('sessao anterior ainda valida');
     return;
   }
 
-  await page.locator(selectors.username).first().fill(username);
-  await page.locator(selectors.password).first().fill(password);
+  let userField = await visibleLocator(page, selectors.username);
+  let passField = await visibleLocator(page, selectors.password);
+  let submitButton = await visibleLocator(page, selectors.submit);
 
+  // seletores do config não bateram: acha o formulário pelo campo de senha
+  if (!userField || !passField) {
+    const detected = await autoDetectLoginForm(page);
+    if (!detected) {
+      throw new Error(
+        `nao achei o formulario de login em ${page.url()} — rode "npm run scrape" para ver a pagina e ajuste coopanest.selectors no config.json`,
+      );
+    }
+    log(`seletores do config nao bateram; usei o formulario detectado na pagina (${detected.campos} campo(s))`);
+    passField = page.locator('[data-coopanest="senha"]').first();
+    if (detected.usuario) userField = page.locator('[data-coopanest="usuario"]').first();
+    if (detected.enviar) submitButton = page.locator('[data-coopanest="enviar"]').first();
+  }
+
+  if (!userField) throw new Error('achei o campo de senha mas nao o de usuario — ajuste coopanest.selectors.username');
+
+  await userField.fill(username);
+  await passField.fill(password);
+
+  const urlAntes = page.url();
   await Promise.all([
     page.waitForLoadState('networkidle', { timeout: navigationTimeoutMs }).catch(() => {}),
-    page.locator(selectors.submit).first().click(),
+    submitButton ? submitButton.click() : passField.press('Enter'),
   ]);
   await page.waitForTimeout(2500);
+
+  // O Chromium só envia no Enter quando o formulário tem um campo só: com usuário
+  // e senha, nada acontece. Sem botão identificável, dispara o submit na mão.
+  if (!submitButton && page.url() === urlAntes && (await visibleLocator(page, 'input[type="password"]'))) {
+    log('Enter nao enviou o formulario; disparando submit direto');
+    await page.evaluate(() => {
+      const form = document.querySelector('input[type="password"]')?.form;
+      if (!form) return;
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else form.submit();
+    });
+    await page.waitForLoadState('networkidle', { timeout: navigationTimeoutMs }).catch(() => {});
+    await page.waitForTimeout(2000);
+  }
 
   if (selectors.loggedIn && !(await isLoggedIn(page, selectors))) {
     throw new Error(
