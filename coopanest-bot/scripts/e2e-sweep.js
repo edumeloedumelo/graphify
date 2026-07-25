@@ -17,7 +17,7 @@ const QUANTIDADE = { 'Aguardando Pagamento': 12, 'Aguardando Envio': 8, 'Em Proc
 const PAGINA = `<!doctype html><html><body>
 <h2>Controle de Guias - Cooperados</h2>
 <input id="periodo" type="text" value="25/01/2025 - 25/07/2026"/>
-<div id="filtro">Selecione o item</div>
+<div id="filtro">Selecione o item <i>&#9662;</i></div>
 <ul id="opcoes" style="display:none"></ul>
 <div>Guias por página: <div id="porPagina">10</div></div>
 <table><thead><tr><th>CPSA</th><th>Status</th><th>Paciente</th><th>Data Cirurgia</th><th>Valor Faturado</th></tr></thead>
@@ -57,7 +57,8 @@ function render() {
     .map((l) => '<tr><td>' + l.cpsa + '</td><td>' + l.status + '</td><td>' + l.paciente + '</td><td>' + l.data + '</td><td>' + l.valor + '</td></tr>')
     .join('');
   document.getElementById('rodape').innerHTML =
-    '<span>Mostrando ' + (total ? inicio + 1 : 0) + ' a ' + Math.min(inicio + porPagina, total) + ' de ' + total + ' resultados</span>';
+    '<span>Mostrando</span> <b>' + (total ? inicio + 1 : 0) + '</b> <span>a</span> <b>' +
+    Math.min(inicio + porPagina, total) + '</b> <span>de</span> <b>' + total + '</b> <span>resultados</span>';
   document.getElementById('paginacao').innerHTML =
     Array.from({ length: paginas }, (_, i) => '<button class="pg">' + (i + 1) + '</button>').join('');
   for (const botao of document.querySelectorAll('.pg')) {
@@ -111,6 +112,14 @@ function check(nome, fn) {
 console.log('\nvarredura da listagem de guias\n');
 
 check('lerContagem entende o rodape do portal', () => {
+  // no portal o texto vem quebrado entre <span> e <b>; a leitura e feita no
+  // texto corrido da pagina justamente por isso
+  assert.deepEqual(lerContagem('Mostrando 1 a 10 de 36 resultados'), {
+    total: 36,
+    porPagina: 10,
+    paginas: 4,
+    confiavel: true,
+  });
   assert.deepEqual(lerContagem('Mostrando 1 a 10 de 36 resultados'), {
     total: 36,
     porPagina: 10,

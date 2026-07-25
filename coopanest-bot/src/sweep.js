@@ -70,11 +70,21 @@ async function marcar(page, marca, criterio) {
         const re = /(\d{2}\/\d{2}\/\d{4})\s*[-–—]\s*(\d{2}\/\d{2}\/\d{4})/;
         alvo = candidatos.find((input) => visivel(input) && re.test(input.value || ''));
       } else if (tipo === 'rotulo') {
-        alvo = candidatos.find((element) => {
+        const exato = candidatos.find((element) => {
           if (!visivel(element)) return false;
           const conteudo = (element.innerText || element.placeholder || '').trim();
           return conteudo === texto && element.children.length <= 3;
         });
+        // o rotulo pode vir acompanhado de icone/seta no mesmo elemento:
+        // se nao houver correspondencia exata, pega o menor que o contenha
+        const contendo = candidatos
+          .filter((element) => {
+            if (!visivel(element)) return false;
+            const conteudo = (element.innerText || element.placeholder || '').trim();
+            return conteudo.includes(texto) && conteudo.length <= texto.length + 20;
+          })
+          .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+        alvo = exato || contendo[0];
       } else if (tipo === 'folhaExata') {
         alvo = candidatos.find(
           (element) =>
@@ -110,7 +120,24 @@ export async function aplicarPeriodo(page, anos, log = () => {}) {
   const alvo = periodoDesejado(anos);
 
   const achou = await marcar(page, 'periodo', { tipo: 'periodo', seletores: 'input' });
-  if (!achou) return { ok: false, motivo: 'campo de periodo nao encontrado' };
+  if (!achou) {
+    // nao e um <input>: descobre onde o portal mostra o intervalo, para eu
+    // saber se da para digitar ou se e um calendario que precisa de clique
+    const onde = await page.evaluate(() => {
+      const re = /(\d{2}\/\d{2}\/\d{4})\s*[-–—]\s*(\d{2}\/\d{2}\/\d{4})/;
+      const alvo = [...document.querySelectorAll('*')].find(
+        (element) => element.offsetParent !== null && element.children.length === 0 && re.test(element.innerText || ''),
+      );
+      if (!alvo) return null;
+      return { tag: alvo.tagName.toLowerCase(), texto: (alvo.innerText || '').trim().slice(0, 40) };
+    });
+    return {
+      ok: false,
+      motivo: onde
+        ? `o intervalo aparece num <${onde.tag}> ("${onde.texto}"), nao num campo de texto`
+        : 'campo de periodo nao encontrado',
+    };
+  }
 
   const campo = page.locator('[data-sweep="periodo"]').first();
   const antes = await campo.inputValue().catch(() => '');
@@ -206,11 +233,13 @@ export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esp
     return true;
   };
 
+  // o texto da contagem costuma vir quebrado em varios elementos
+  // ("<span>Mostrando</span> <b>1</b> a <b>10</b> de <b>36</b>"), entao a busca
+  // e feita no texto corrido da pagina, nao em um elemento so
   const contagemTexto = await page.evaluate((marcador) => {
-    const alvo = [...document.querySelectorAll('*')].find(
-      (element) => element.children.length === 0 && (element.innerText || '').includes(marcador),
-    );
-    return alvo ? alvo.innerText : '';
+    const corpo = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    const posicao = corpo.indexOf(marcador);
+    return posicao === -1 ? '' : corpo.slice(posicao, posicao + 120);
   }, rotuloResultados);
 
   const contagem = lerContagem(contagemTexto);
@@ -292,7 +321,12 @@ export async function sweepListing(page, { cfg, log = () => {}, onPage } = {}) {
 export async function pareceListagem(page, cfg) {
   const s = cfg.sweep || {};
   const marcador = s.rotuloResultados || 'Mostrando';
-  return page
-    .evaluate((termo) => (document.body?.innerText || '').includes(termo), marcador)
-    .catch(() => false);
+  const texto = await page
+    .evaluate((termo) => {
+      const corpo = (document.body?.innerText || '').replace(/\s+/g, ' ');
+      const posicao = corpo.indexOf(termo);
+      return posicao === -1 ? '' : corpo.slice(posicao, posicao + 120);
+    }, marcador)
+    .catch(() => '');
+  return Boolean(lerContagem(texto));
 }
