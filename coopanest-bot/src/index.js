@@ -13,6 +13,9 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '5mb' }));
 
+// resultado da conferência da planilha feita no boot
+let sheetsCheck = { ok: false, motivo: 'ainda nao conferido' };
+
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -21,7 +24,12 @@ app.get('/health', (_req, res) => {
     casesTracked: countCases(),
     syncRunning: isSyncRunning(),
     lastSync: lastSyncInfo(),
-    sheets: sheets.sheetsEnabled(),
+    planilha: sheetsCheck,
+    portal: {
+      urlConfigurada: Boolean(process.env.COOPANEST_LOGIN_URL),
+      credenciais: Boolean(process.env.COOPANEST_USER && process.env.COOPANEST_PASS),
+    },
+    anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
   });
 });
 
@@ -71,9 +79,22 @@ function round2(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[index] ${getConfig().botName} ouvindo na porta ${PORT}`);
   console.log('[index] GET /health | GET /status | GET /salario | POST /sync');
+
+  sheetsCheck = await sheets.verifyAccess();
+  if (sheetsCheck.ok) {
+    console.log(`[index] planilha OK: "${sheetsCheck.planilha}" (abas: ${sheetsCheck.abas.join(', ') || 'nenhuma ainda'})`);
+  } else {
+    console.error(`[index] PLANILHA INDISPONIVEL: ${sheetsCheck.motivo}`);
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) console.error('[index] ANTHROPIC_API_KEY nao configurada');
+  if (!process.env.COOPANEST_USER || !process.env.COOPANEST_PASS) {
+    console.error('[index] COOPANEST_USER / COOPANEST_PASS nao configurados');
+  }
+
   startScheduler();
 });
 

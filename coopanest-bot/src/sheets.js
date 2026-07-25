@@ -41,6 +41,56 @@ export function sheetsEnabled() {
   return Boolean(process.env.GOOGLE_SHEET_ID && process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 }
 
+/** E-mail da service account, sem estourar erro se o JSON estiver quebrado. */
+export function serviceAccountEmail() {
+  try {
+    return credentials().client_email || '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Confere se a planilha está acessível e devolve o diagnóstico — nunca lança.
+ * Roda no boot para o problema aparecer no /health em vez de só na 1a varredura.
+ */
+export async function verifyAccess() {
+  if (!process.env.GOOGLE_SHEET_ID) {
+    return { ok: false, motivo: 'GOOGLE_SHEET_ID nao configurada' };
+  }
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    return { ok: false, motivo: 'GOOGLE_SERVICE_ACCOUNT_JSON nao configurada' };
+  }
+
+  const email = serviceAccountEmail();
+  if (!email) {
+    return {
+      ok: false,
+      motivo: 'GOOGLE_SERVICE_ACCOUNT_JSON invalida — cole o JSON inteiro da service account, ou o base64 dele',
+    };
+  }
+
+  try {
+    const client = await getClient();
+    const { data } = await client.spreadsheets.get({ spreadsheetId: spreadsheetId() });
+    return {
+      ok: true,
+      planilha: data.properties?.title || '',
+      abas: (data.sheets || []).map((sheet) => sheet.properties.title),
+      serviceAccount: email,
+    };
+  } catch (err) {
+    const status = err.status || err.code;
+    let motivo = err.message;
+    if (status === 403) {
+      motivo = `a planilha existe, mas a service account nao tem acesso — compartilhe com ${email} como Editor`;
+    } else if (status === 404) {
+      motivo = 'GOOGLE_SHEET_ID nao encontrada — confira o trecho do meio da URL da planilha';
+    }
+    return { ok: false, status, motivo, serviceAccount: email };
+  }
+}
+
 async function getClient() {
   if (!clientPromise) {
     clientPromise = (async () => {
