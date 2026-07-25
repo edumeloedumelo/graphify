@@ -1,38 +1,51 @@
-# Coopanest Bot
+# Coopanest Sync
 
-Bot que varre o portal da **Coopanest Rio**, mantém uma planilha do Google Sheets com todas as cirurgias e avisa no WhatsApp sempre que algo muda — com ⚠️ em cima da mudança.
+Serviço que loga no portal da **Coopanest Rio**, varre **todas as páginas** do site e mantém uma planilha do Google Sheets sempre atualizada com as cirurgias — marcando com ⚠️ tudo que mudou desde a última leitura.
 
-Também calcula o **salário da Sara**: 5% do líquido (valor bruto − 20% de imposto) das cirurgias ligadas a DATBABY / Dr. Raphael Datrino / Dr. Thiago Dantas.
+Calcula também o **salário da Sara**: 5% do líquido (valor bruto − 20% de imposto) das cirurgias ligadas a DATBABY, Dr. Raphael Datrino e Dr. Thiago Dantas.
+
+Sem WhatsApp e sem comandos: roda sozinho, do portal direto para a planilha.
 
 ---
 
 ## Como funciona
 
 ```
-                    ┌─────────────────────────────┐
-   a cada 60 min →  │  Playwright loga no portal  │
-   ou /sync         │  e lê a tabela de cirurgias │
-                    └──────────────┬──────────────┘
-                                   ↓
-                    ┌─────────────────────────────┐
-                    │  Claude estrutura os dados  │  ← claude-sonnet-4-6
-                    └──────────────┬──────────────┘
-                                   ↓
-                    ┌─────────────────────────────┐
-                    │  diff contra a última leitura│ (/data/cases.json)
-                    └──────────────┬──────────────┘
-                                   ↓
-              ┌────────────────────┴────────────────────┐
-              ↓                                         ↓
-   ┌────────────────────┐                   ┌────────────────────────┐
-   │  Google Sheets     │                   │  WhatsApp (UltraMsg)   │
-   │  • Cirurgias       │                   │  • grupo Dr. Eduardo   │
-   │  • Salario Sara    │                   │  • grupo Dra. Fernanda │
-   │  • Historico       │                   │  ⚠️ só o que mudou      │
-   └────────────────────┘                   └────────────────────────┘
+  a cada 60 min          ┌────────────────────────────────────────┐
+  (ou POST /sync)   →    │ 1. login no portal (Playwright)        │
+                         │ 2. varre o site inteiro em largura:    │
+                         │    segue links, pagina listagens,      │
+                         │    abre as telas de detalhe            │
+                         └───────────────────┬────────────────────┘
+                                             ↓
+                         ┌────────────────────────────────────────┐
+                         │ 3. só as páginas com cara de dado vão   │
+                         │    para o Claude estruturar (JSON)      │  claude-sonnet-4-6
+                         └───────────────────┬────────────────────┘
+                                             ↓
+                         ┌────────────────────────────────────────┐
+                         │ 4. diff contra a última leitura         │  /data/cases.json
+                         └───────────────────┬────────────────────┘
+                                             ↓
+                         ┌────────────────────────────────────────┐
+                         │ 5. Google Sheets                        │
+                         │    • Cirurgias   (⚠️ + linha destacada) │
+                         │    • Salario Sara                       │
+                         │    • Historico   (antes → depois)       │
+                         └────────────────────────────────────────┘
 ```
 
-**Sobre o plugin do Chrome:** a ideia original era o Claude varrer o site por uma extensão do navegador. Isso não funciona num bot hospedado — a extensão só existe enquanto o seu Chrome está aberto, e o Railway não tem navegador na sua máquina. Aqui o bot abre o portal **ele mesmo**, headless, com o seu login, dentro do container. O efeito é o mesmo e roda 24h sem depender do seu computador.
+**Sobre o plugin do Chrome:** a ideia original era o Claude varrer o site por uma extensão do navegador. Isso não funciona num serviço hospedado — a extensão só existe enquanto o seu Chrome está aberto. Aqui o serviço abre o portal **ele mesmo**, headless, com o seu login, dentro do container. Roda 24h sem depender do seu computador.
+
+### A varredura não para na primeira página
+
+A partir da página em que o login cai (ou das URLs em `COOPANEST_CASES_URL`), o crawler:
+
+- segue **todos os links do mesmo domínio**, em largura, até `maxPages` (60) e `maxDepth` (3);
+- **pagina as listagens** clicando em "Próxima" — e coleta os links de *cada* página da paginação, não só da última;
+- abre as **telas de detalhe** de cada cirurgia e junta o que só existe lá (recurso de glosa, observações) com o que veio da listagem;
+- **nunca clica em "Sair"/logout** — é o link que derrubaria a sessão no meio da varredura. Também pula download de arquivo, impressão, exclusão e `mailto:`/`javascript:`;
+- **não manda página inútil para a IA**: menu, ajuda e avisos não têm data nem valor, então são descartados antes de gastar token.
 
 ---
 
@@ -40,53 +53,44 @@ Também calcula o **salário da Sara**: 5% do líquido (valor bruto − 20% de i
 
 ```
 coopanest-bot/
-  Dockerfile              node:20-slim + ghostscript + chromium
+  Dockerfile              node:20-slim + chromium
   package.json            ESM (type: module)
   railway.json            startCommand + healthcheck
-  config.json             configuração editável (médicos, parceiros, colunas, seletores)
+  config.json             configuração editável (crawler, médicos, parceiros, colunas)
   src/
-    index.js              Express: /webhook, /health, /status, /sync — porta 3000
-    router.js             recebe o webhook do UltraMsg, cacheia mídias, roteia comandos
-    commands.js           handlers, lock por chatId, /analisar com setLastTime antecipado
-    parser.js             splitIntoCases: abertura/fechamento, _alreadyAnalyzed
-    triage.js             monta contexto + mídias → Anthropic → retry sem blocos ruins
+    index.js              Express: /health, /status, /salario, POST /sync — porta 3000
+    scheduler.js          dispara a varredura no intervalo configurado
+    coopanest.js          login + orquestra a varredura do portal
+    crawler.js            percorre o site: links, paginação, filtros, deduplicação
+    extractor.js          manda cada página para o Claude e normaliza as cirurgias
     prompt.js             buildSystemPrompt a partir do config.json
-    format.js             limpa markdown do Claude → formato WhatsApp; dinheiro e datas
     anthropic.js          fetch para api.anthropic.com, timeout 120s, AbortController
-    ultramsg.js           sendText, splitMessage 4000, downloadMediaBlock, compressPdf
-    state.js              lastTime por chatId — STATE_DIR = process.env.STATE_DIR || '/data'
-    mediastore.js         URLs de mídia por chat — STATE_DIR = '/data'
-    fetcher.js            GET /chats/messages, LOOKBACK_SECONDS=3600, ordena por timestamp
-    coopanest.js          login + varredura do portal (Playwright)
-    sheets.js             Google Sheets API v4: abas, upsert, histórico, salário
-    diff.js               caseKey estável + detecção de mudanças
-    salary.js             5% do líquido para a Sara, por mês
+    diff.js               ID estável por cirurgia + detecção de mudanças
     snapshot.js           última leitura conhecida (/data/cases.json)
-    sync.js               orquestra: varre → compara → planilha → WhatsApp
-    scheduler.js          varredura automática no intervalo configurado
+    sheets.js             Google Sheets API v4: abas, upsert, histórico, salário
+    salary.js             5% do líquido para a Sara, por mês
+    sync.js               orquestra: varre → compara → grava na planilha
+    format.js             dinheiro, datas e normalização de texto
+    config.json loader    (src/config.js) com override em runtime
+    state.js              última varredura (/data/state.json)
   scripts/
-    selftest.js           28 testes offline (sem rede)
-    e2e-analisar.js       fluxo do grupo ponta a ponta, com mocks
-    e2e-sync.js           portal falso + login + diff + aviso, com mocks
+    selftest.js           21 testes offline (sem rede)
+    e2e-sync.js           portal falso multi-página, ponta a ponta
     sync-once.js          roda uma varredura pelo terminal
-    scrape-debug.js       mostra o que o navegador vê (para ajustar seletores)
+    scrape-debug.js       mostra o que o crawler vê, sem gastar IA
     check-syntax.js       node --check em tudo
 ```
 
 ---
 
-## Comandos no WhatsApp
+## Endpoints
 
-| Comando | O que faz |
+| Rota | O que faz |
 |---|---|
-| `/sync` | varre o portal agora e atualiza a planilha |
-| `/status` | última varredura, nº de cirurgias monitoradas, config |
-| `/salario` | cálculo do salário da Sara |
-| `/planilha` | link da planilha |
-| `/analisar` | lê os casos digitados no grupo e joga na planilha |
-| `/ajuda` | lista os comandos |
-
-A varredura roda sozinha; os comandos são para quando você quiser forçar.
+| `GET /health` | estado do serviço (usado pelo healthcheck do Railway) |
+| `GET /status` | última varredura, nº de cirurgias, link da planilha |
+| `GET /salario` | cálculo do salário da Sara em JSON |
+| `POST /sync` | dispara uma varredura agora (protegido por `SYNC_SECRET`, se definido) |
 
 ---
 
@@ -94,26 +98,20 @@ A varredura roda sozinha; os comandos são para quando você quiser forçar.
 
 1. **Novo projeto → Deploy from GitHub** → repo `edumeloedumelo/graphify`, branch `claude/whatsapp-coopanest-bot-qn7e6b`
 2. **Settings → Root Directory:** `coopanest-bot`
-3. **Variables:** copie de `.env.example` (lista abaixo)
-4. **Volume: Mount Path `/data`** — essencial. Sem isso o bot esquece o que já viu a cada redeploy e reenvia tudo como novidade.
-5. **UltraMsg → Webhook:** URL `https://SEU-DOMINIO.up.railway.app/webhook`, **Webhook Download Media: ON**
+3. **Variables:** copie de `.env.example`
+4. **Volume: Mount Path `/data`** — essencial. Sem isso o serviço esquece o que já viu a cada redeploy e trata tudo como novidade.
 
 ### Variáveis
 
 ```
-ULTRAMSG_INSTANCE_ID=          ANTHROPIC_MODEL=claude-sonnet-4-6
-ULTRAMSG_TOKEN=                ANTHROPIC_MAX_TOKENS=4096
-ANTHROPIC_API_KEY=             LOOKBACK_SECONDS=3600
-STATE_DIR=/data                PORT=3000
-ALLOWED_CHATS=                 (vazio = todos)
-ADMIN_NUMBERS=                 (vazio = todos são admin)
-
-COOPANEST_LOGIN_URL=           COOPANEST_USER=
-COOPANEST_CASES_URL=           COOPANEST_PASS=
-
-CHAT_EDUARDO=                  CHAT_FERNANDA=          CHAT_ADMIN=
+ANTHROPIC_API_KEY=             ANTHROPIC_MODEL=claude-sonnet-4-6
+COOPANEST_LOGIN_URL=           ANTHROPIC_MAX_TOKENS=4096
+COOPANEST_USER=                COOPANEST_CASES_URL=    (vazio = começa pós-login)
+COOPANEST_PASS=
 GOOGLE_SHEET_ID=               GOOGLE_SERVICE_ACCOUNT_JSON=
+STATE_DIR=/data                PORT=3000
 SYNC_INTERVAL_MINUTES=60       SYNC_ON_BOOT=true       SYNC_SECRET=
+CRAWL_MAX_PAGES=60             CRAWL_MAX_DEPTH=3
 ```
 
 ### Google Sheets
@@ -126,35 +124,37 @@ SYNC_INTERVAL_MINUTES=60       SYNC_ON_BOOT=true       SYNC_SECRET=
 
 As três abas (`Cirurgias`, `Salario Sara`, `Historico`) são criadas sozinhas na primeira execução.
 
-### chatId dos grupos
-
-`https://api.ultramsg.com/INSTANCE/chats?token=TOKEN` — o do grupo termina em `@g.us`.
-
 ---
 
-## Ajustando os seletores do portal
+## Ajustando ao portal real
 
-O `config.json` traz seletores genéricos (`input[name='usuario']`, `input[type='password']`, `table`). Se o login falhar, veja o que o navegador está enxergando:
+O `config.json` traz seletores genéricos. Se o login falhar ou faltar página, veja o que o crawler está enxergando:
 
 ```bash
 npm install && npx playwright install chromium
 cp .env.example .env      # preencha COOPANEST_*
-npm run scrape            # imprime o HTML/texto da página, não gasta IA
+npm run scrape            # lista as páginas visitadas, marca as que iriam para a IA
+npm run scrape -- --full  # imprime o conteúdo de cada página
 ```
 
-Depois ajuste `coopanest.selectors` no `config.json`. Dá para mudar em produção sem redeploy: o bot lê `/data/config.override.json` por cima do `config.json`.
+- **Login falhou?** ajuste `coopanest.selectors` (`username`, `password`, `submit`, `loggedIn`).
+- **Faltou página?** aumente `crawl.maxPages` / `crawl.maxDepth`, ou coloque a URL da listagem em `COOPANEST_CASES_URL`.
+- **Página de cirurgias sem a marca `[DADO]`?** acrescente uma palavra em `crawl.dataKeywords` (ou ponha `crawl.onlyPagesWithData: false` para mandar tudo para a IA).
+- **Paginação não avançou?** acrescente o seletor do botão em `crawl.nextPageSelectors`.
+
+Tudo isso muda em produção **sem redeploy**: o serviço lê `/data/config.override.json` por cima do `config.json`.
 
 ---
 
 ## Testes
 
 ```bash
-npm test          # 28 testes offline: parser, diff, salário, formatação, webhook
-npm run test:e2e  # fluxo completo com portal/UltraMsg/Anthropic falsos
+npm test          # 21 testes offline: crawler, diff, salário, extração, planilha
+npm run test:e2e  # portal falso com menu, paginação, detalhes e armadilha de logout
 npm run check     # node --check em todos os arquivos
 ```
 
-O `test:e2e` precisa de um Chromium. Se o do Playwright não estiver instalado, aponte para outro:
+O `test:e2e` precisa de um Chromium; se o do Playwright não estiver instalado:
 
 ```bash
 CHROMIUM_PATH=/caminho/para/chrome npm run test:e2e
@@ -164,10 +164,8 @@ CHROMIUM_PATH=/caminho/para/chrome npm run test:e2e
 
 ## Detalhes que importam
 
-- **Nada é reenviado à toa.** Cada cirurgia tem um ID estável (paciente + data + procedimento). O bot só avisa o que é novo ou mudou de verdade — comparando valores como número, então `4.200,00` e `4200` não contam como mudança.
-- **Campo vazio não apaga dado.** Se uma leitura vier incompleta (portal fora do ar, tabela paginada), o valor anterior é preservado em vez de virar "mudou para vazio".
-- **`/analisar` não perde nem repete mensagem.** O marcador de tempo é gravado *antes* da busca; mensagens que chegam durante a análise ficam para a próxima rodada.
-- **Um `/analisar` por grupo de cada vez** (lock em memória, liberado no `finally` mesmo se der erro).
-- **PDF acima de 10MB** é comprimido com Ghostscript antes de ir para o Claude. Se a URL devolver HTML em vez do arquivo, o bot avisa em vez de mandar lixo para a IA.
-- **Arquivo rejeitado pela API** é descartado e a análise continua sem ele; no limite, roda só com o texto.
-- **Sessão do portal** fica em `/data/coopanest-session.json`, então nem toda varredura precisa refazer login.
+- **Nada é reescrito à toa.** Cada cirurgia tem um ID estável (paciente + data + procedimento). Só entra na planilha o que é novo ou mudou de verdade — valores são comparados como número, então `4.200,00` e `4200` não contam como mudança.
+- **Campo vazio não apaga dado.** Se uma leitura vier incompleta (portal fora do ar, sessão caída), o valor anterior é preservado em vez de virar "mudou para vazio".
+- **Listagem + detalhe viram uma linha só.** A mesma cirurgia aparece nas duas telas; o resultado é a união dos campos preenchidos.
+- **A sessão é reaproveitada** (`/data/coopanest-session.json`), então nem toda varredura precisa refazer login. Se o portal devolver a tela de login no meio da varredura, isso vira aviso no `/status` em vez de dado errado na planilha.
+- **Uma varredura por vez** — o `POST /sync` responde 409 se já houver uma rodando, e o agendador pula o ciclo em vez de empilhar.

@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getConfig, STATE_DIR } from './config.js';
-import { analyzePortalContent, dedupeCases } from './triage.js';
+import { extractCases, dedupeCases } from './extractor.js';
+import { crawlSite, looksLikeData, normalizeUrl } from './crawler.js';
 
 const SESSION_FILE = path.join(STATE_DIR, 'coopanest-session.json');
 
@@ -16,7 +17,7 @@ async function loadPlaywright() {
     return mod.chromium;
   } catch (err) {
     throw new Error(
-      `Playwright indisponivel (${err.message}). No Railway isso vem do Dockerfile: "npx playwright install chromium".`,
+      `Playwright indisponivel (${err.message}). No Railway isso vem do Dockerfile: "npx playwright install --with-deps chromium".`,
     );
   }
 }
@@ -38,28 +39,6 @@ function saveSession(state) {
   }
 }
 
-/** Serializa a pagina: tabelas viradas em linhas "celula | celula" + texto visivel. */
-async function extractPageContent(page) {
-  return page.evaluate(() => {
-    const tables = [...document.querySelectorAll('table')]
-      .map((table) => {
-        const rows = [...table.querySelectorAll('tr')]
-          .map((tr) =>
-            [...tr.querySelectorAll('th,td')]
-              .map((cell) => (cell.innerText || '').replace(/\s+/g, ' ').trim())
-              .join(' | '),
-          )
-          .filter((row) => row.replace(/[|\s]/g, '').length > 0);
-        return rows.join('\n');
-      })
-      .filter(Boolean)
-      .join('\n\n---\n\n');
-
-    const bodyText = (document.body?.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
-    return tables ? `TABELAS:\n${tables}\n\nTEXTO DA PAGINA:\n${bodyText}` : bodyText;
-  });
-}
-
 async function isLoggedIn(page, selectors) {
   if (!selectors.loggedIn) return false;
   try {
@@ -78,7 +57,7 @@ async function performLogin(page, cfg) {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
 
   if (await isLoggedIn(page, selectors)) {
-    log('sessao ainda valida, login dispensado');
+    log('sessao anterior ainda valida');
     return;
   }
 
@@ -89,37 +68,38 @@ async function performLogin(page, cfg) {
     page.waitForLoadState('networkidle', { timeout: navigationTimeoutMs }).catch(() => {}),
     page.locator(selectors.submit).first().click(),
   ]);
-
   await page.waitForTimeout(2500);
 
   if (selectors.loggedIn && !(await isLoggedIn(page, selectors))) {
-    const url = page.url();
-    throw new Error(`login aparentemente falhou (continuo em ${url}) — confira usuario/senha e os seletores no config.json`);
+    throw new Error(
+      `login aparentemente falhou (parei em ${page.url()}) — confira usuario/senha e os seletores no config.json`,
+    );
   }
   log('login concluido');
 }
 
-function casesUrls(cfg) {
-  const raw = cfg.coopanest?.casesUrl || '';
-  const urls = String(raw)
+/** URLs semente: as configuradas ou, na falta delas, a página em que o login caiu. */
+function seedUrls(cfg, page) {
+  const configured = String(cfg.coopanest?.casesUrl || '')
     .split(',')
     .map((url) => url.trim())
+    .filter(Boolean)
+    .map(normalizeUrl)
     .filter(Boolean);
-  return urls;
+
+  return configured.length ? configured : [normalizeUrl(page.url())].filter(Boolean);
 }
 
 /**
- * Faz login no portal da Coopanest Rio, varre as paginas de cirurgias e devolve
- * os casos estruturados. As credenciais sao as do proprio usuario do bot.
+ * Loga no portal da Coopanest Rio, varre TODAS as páginas alcançáveis a partir
+ * das sementes e devolve as cirurgias estruturadas.
+ *
+ * @param {{debug?: boolean}} options debug: devolve o conteúdo cru, sem chamar a IA
  */
 export async function scrapeCases({ debug = false } = {}) {
   const cfg = getConfig();
   const chromium = await loadPlaywright();
-  const selectors = cfg.coopanest.selectors || {};
   const timeout = cfg.coopanest.navigationTimeoutMs || 45_000;
-
-  const warnings = [];
-  const pages = [];
 
   const browser = await chromium.launch({
     headless: true,
@@ -135,49 +115,53 @@ export async function scrapeCases({ debug = false } = {}) {
   });
   context.setDefaultTimeout(timeout);
 
+  let pages = [];
+  const warnings = [];
+  let visited = [];
+
   try {
     const page = await context.newPage();
     await performLogin(page, cfg);
     saveSession(await context.storageState());
 
-    const urls = casesUrls(cfg);
-    if (urls.length === 0) {
-      // sem URL especifica, usa a pagina em que o login caiu
-      urls.push(page.url());
-      warnings.push('COOPANEST_CASES_URL vazia — usei a pagina inicial pos-login');
-    }
+    const seeds = seedUrls(cfg, page);
+    log(`varrendo o portal a partir de ${seeds.length} URL(s) semente`);
 
-    for (const url of urls) {
-      try {
-        log('lendo', url);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
-        await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
-        if (selectors.casesTable) {
-          await page.locator(selectors.casesTable).first().waitFor({ timeout: 10_000 }).catch(() => {});
-        }
-        const content = await extractPageContent(page);
-        pages.push({ url, content });
-      } catch (err) {
-        warnings.push(`falha abrindo ${url}: ${err.message}`);
-      }
-    }
+    const result = await crawlSite(page, seeds, { log: (line) => log(line) });
+    pages = result.pages;
+    visited = result.visited;
+    warnings.push(...result.warnings);
+
+    log(`varredura terminou: ${visited.length} URL(s) visitada(s), ${pages.length} pagina(s) com conteudo`);
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
   }
 
-  if (debug) return { cases: [], warnings, pages };
+  if (debug) return { cases: [], warnings, pages, visited };
+
+  // só as páginas que parecem ter dados vão para a IA
+  const keywords = cfg.crawl?.dataKeywords || [];
+  const withData = cfg.crawl?.onlyPagesWithData === false
+    ? pages
+    : pages.filter((item) => looksLikeData(item.content, { keywords, minMatches: cfg.crawl?.minKeywordMatches ?? 2 }));
+
+  const skipped = pages.length - withData.length;
+  if (skipped > 0) log(`${skipped} pagina(s) sem cara de dado — nao gastei IA com elas`);
 
   const collected = [];
-  for (const { url, content } of pages) {
-    if (!content || content.length < 40) {
-      warnings.push(`pagina ${url} veio praticamente vazia`);
-      continue;
-    }
-    const result = await analyzePortalContent({ label: url, content });
+  for (const item of withData) {
+    const result = await extractCases({ label: item.url, content: item.content });
+    if (result.cases.length) log(`${result.cases.length} cirurgia(s) em ${item.url}`);
     collected.push(...result.cases);
     warnings.push(...result.warnings);
   }
 
-  return { cases: dedupeCases(collected), warnings, pages: pages.map((page) => page.url) };
+  return {
+    cases: dedupeCases(collected),
+    warnings,
+    pages: pages.map((item) => item.url),
+    visited,
+    pagesAnalyzed: withData.length,
+  };
 }

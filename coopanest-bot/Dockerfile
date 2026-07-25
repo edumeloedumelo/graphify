@@ -8,11 +8,10 @@ WORKDIR /app
 
 COPY package*.json ./
 
-# ghostscript: comprime PDF > 10MB antes de mandar pro Claude
 # playwright install --with-deps: instala o Chromium e as libs de sistema que ele
-# exige (a lista vem do proprio Playwright, por isso o apt-get list so e apagado depois)
+# exige (a lista vem do proprio Playwright, por isso o cache do apt so e apagado depois)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ghostscript ca-certificates fonts-liberation \
+    && apt-get install -y --no-install-recommends ca-certificates fonts-liberation \
     && npm install --omit=dev \
     && npx playwright install --with-deps chromium \
     && apt-get clean \

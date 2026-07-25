@@ -9,19 +9,16 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'coopanest-test-'));
-process.env.CHAT_EDUARDO = '120363000000000001@g.us';
-process.env.CHAT_FERNANDA = '120363000000000002@g.us';
 
-const { splitMessage, sniffMime } = await import('../src/ultramsg.js');
-const { toWhatsApp, toNumber, formatDate, monthKey, formatBRL } = await import('../src/format.js');
-const { splitIntoCases, isBotMessage, isCaseOpener, isSeparator, pendingCases } = await import('../src/parser.js');
+const { toNumber, formatDate, monthKey, formatBRL } = await import('../src/format.js');
 const { caseKey, diffSnapshot, diffCase } = await import('../src/diff.js');
 const { computeSalary, isSalaryCase } = await import('../src/salary.js');
-const { normalizeCase, dedupeCases } = await import('../src/triage.js');
-const { normalizeWebhook, isChatAllowed } = await import('../src/router.js');
-const { parseCommand } = await import('../src/commands.js');
-const { doctorByChatId, doctorByName, getConfig } = await import('../src/config.js');
+const { normalizeCase, dedupeCases } = await import('../src/extractor.js');
+const { doctorByName, getConfig } = await import('../src/config.js');
 const { buildRow, columnLetter } = await import('../src/sheets.js');
+const { normalizeUrl, shouldVisit, looksLikeData, contentFingerprint, sameOrigin } = await import(
+  '../src/crawler.js'
+);
 
 let passed = 0;
 const failures = [];
@@ -55,106 +52,6 @@ test('formatDate e monthKey normalizam datas', () => {
 test('formatBRL', () => {
   assert.equal(formatBRL(4200), 'R$ 4.200,00');
   assert.equal(formatBRL(''), '');
-});
-
-test('toWhatsApp converte markdown', () => {
-  const out = toWhatsApp('## Título\n**negrito**\n- item um\n- item dois\n```\ncodigo\n```');
-  assert.match(out, /\*Título\*/);
-  assert.match(out, /\*negrito\*/);
-  assert.match(out, /• item um/);
-  assert.ok(!out.includes('```'));
-  assert.ok(!out.includes('##'));
-});
-
-console.log('\nultramsg');
-test('splitMessage respeita o limite de 4000', () => {
-  const linha = 'x'.repeat(300);
-  const texto = Array.from({ length: 40 }, () => linha).join('\n');
-  const chunks = splitMessage(texto);
-  assert.ok(chunks.length > 1);
-  assert.ok(chunks.every((chunk) => chunk.length <= 4000));
-  assert.equal(chunks.join('\n'), texto);
-});
-
-test('splitMessage quebra linha maior que o limite', () => {
-  const chunks = splitMessage('y'.repeat(9000));
-  assert.equal(chunks.length, 3);
-});
-
-test('sniffMime reconhece magic bytes', () => {
-  assert.equal(sniffMime(Buffer.from('%PDF-1.7 xxxxxxx')), 'application/pdf');
-  assert.equal(sniffMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0])), 'image/jpeg');
-  assert.equal(
-    sniffMime(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])),
-    'image/png',
-  );
-  assert.equal(sniffMime(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')])), 'image/webp');
-  assert.equal(sniffMime(Buffer.from('<!doctype html><body>')), null);
-});
-
-console.log('\nparser');
-test('isSeparator e isCaseOpener usam regex', () => {
-  assert.ok(isSeparator('-----'));
-  assert.ok(isSeparator('= = = ='));
-  assert.ok(!isSeparator('--x--'));
-  assert.ok(isCaseOpener('Paciente: Maria Silva'));
-  assert.ok(isCaseOpener('*CASO NOVO*'));
-  assert.ok(isCaseOpener('1) Joao'));
-  assert.ok(!isCaseOpener('bom dia pessoal'));
-});
-
-test('isBotMessage cobre status, erro e laudo', () => {
-  assert.ok(isBotMessage({ body: '⏳ Analisando as mensagens novas do grupo...' }));
-  assert.ok(isBotMessage({ body: '❌ Erro ao analisar: timeout' }));
-  assert.ok(isBotMessage({ body: '📋 *Resumo do caso* (2 blocos)' }));
-  assert.ok(isBotMessage({ body: 'qualquer coisa', fromMe: true }));
-  assert.ok(!isBotMessage({ body: 'Paciente: Maria' }));
-});
-
-test('splitIntoCases separa por abridor e separador', () => {
-  const blocks = splitIntoCases([
-    { body: 'Paciente: Maria Silva' },
-    { body: 'Colecistectomia 12/07/2026' },
-    { body: '-----' },
-    { body: 'Paciente: Joao Souza' },
-    { body: 'Hernia 13/07/2026' },
-  ]);
-  assert.equal(blocks.length, 2);
-  assert.match(blocks[0].text, /Maria Silva/);
-  assert.match(blocks[1].text, /Joao Souza/);
-});
-
-test('analise bem sucedida marca os blocos anteriores', () => {
-  const blocks = splitIntoCases([
-    { body: 'Paciente: Maria Silva' },
-    { body: '📋 *Resumo do caso* pronto' },
-    { body: 'Paciente: Joao Souza' },
-  ]);
-  assert.equal(blocks.length, 2);
-  assert.equal(blocks[0]._alreadyAnalyzed, true);
-  assert.equal(blocks[1]._alreadyAnalyzed, false);
-  assert.equal(pendingCases([
-    { body: 'Paciente: Maria Silva' },
-    { body: '📋 *Resumo do caso* pronto' },
-    { body: 'Paciente: Joao Souza' },
-  ]).length, 1);
-});
-
-test('conteudo novo depois da analise reabre o bloco', () => {
-  const blocks = splitIntoCases([
-    { body: 'Paciente: Maria Silva' },
-    { body: '📋 *Resumo do caso* pronto' },
-    { body: 'valor corrigido para 5000' },
-  ]);
-  assert.equal(blocks.length, 1);
-  assert.equal(blocks[0]._alreadyAnalyzed, false);
-});
-
-test('conteudo solto antes do abridor entra no caso', () => {
-  const blocks = splitIntoCases([{ body: 'guia 8899' }, { body: 'Paciente: Ana' }]);
-  assert.equal(blocks.length, 1);
-  assert.match(blocks[0].text, /guia 8899/);
-  assert.match(blocks[0].text, /Ana/);
 });
 
 console.log('\ndiff');
@@ -230,7 +127,7 @@ test('computeSalary faz 5% do liquido apos 20% de imposto', () => {
   assert.equal(summary.totals.salary, 680); // + 2000*0.8*0.05 = 80
 });
 
-console.log('\ntriage');
+console.log('\nextrator');
 test('normalizeCase limpa valores e datas', () => {
   const item = normalizeCase({
     paciente: ' Maria Silva ',
@@ -258,50 +155,61 @@ test('dedupeCases mantem o registro mais completo', () => {
   assert.equal(list[0].status, 'Pago');
 });
 
-console.log('\nrouter e config');
-test('normalizeWebhook entende texto e midia', () => {
-  const texto = normalizeWebhook({
-    event_type: 'message_received',
-    data: { from: '123@g.us', body: '/sync', type: 'chat', author: '5521999@c.us', time: 1750000000 },
-  });
-  assert.equal(texto.chatId, '123@g.us');
-  assert.equal(texto.body, '/sync');
-  assert.equal(texto.timestamp, 1750000000);
-
-  const midia = normalizeWebhook({
-    data: {
-      from: '123@g.us',
-      type: 'document',
-      body: 'https://media.ultramsg.com/arquivo.pdf',
-      caption: 'guia 8899',
-      filename: 'guia.pdf',
-    },
-  });
-  assert.equal(midia.mediaUrl, 'https://media.ultramsg.com/arquivo.pdf');
-  assert.equal(midia.body, 'guia 8899');
-});
-
-test('parseCommand aceita / e !', () => {
-  assert.deepEqual(parseCommand('/sync'), { name: 'sync', args: '' });
-  assert.deepEqual(parseCommand('!analisar agora'), { name: 'analisar', args: 'agora' });
-  assert.equal(parseCommand('bom dia'), null);
-});
-
-test('isChatAllowed respeita ALLOWED_CHATS', () => {
-  delete process.env.ALLOWED_CHATS;
-  assert.ok(isChatAllowed('qualquer@g.us'));
-  process.env.ALLOWED_CHATS = '120363000000000001@g.us';
-  assert.ok(isChatAllowed('120363000000000001@g.us'));
-  assert.ok(!isChatAllowed('outro@g.us'));
-  delete process.env.ALLOWED_CHATS;
-});
-
-test('medico resolvido por chatId e por nome', () => {
-  assert.equal(doctorByChatId('120363000000000001@g.us')?.id, 'eduardo');
-  assert.equal(doctorByChatId('120363000000000002@g.us')?.id, 'fernanda');
+console.log('\nmedicos');
+test('medico resolvido pelo nome que vem do portal', () => {
   assert.equal(doctorByName('DRA. FERNANDA LIMA')?.id, 'fernanda');
   assert.equal(doctorByName('Dr. Eduardo Melo')?.id, 'eduardo');
   assert.equal(doctorByName('Dr. Ninguem'), null);
+});
+
+
+console.log('\ncrawler');
+test('normalizeUrl tira fragmento e barra final, mas mantem a query', () => {
+  assert.equal(normalizeUrl('https://portal.com/cirurgias/#topo'), 'https://portal.com/cirurgias');
+  assert.equal(normalizeUrl('https://portal.com/lista?pagina=2'), 'https://portal.com/lista?pagina=2');
+  assert.equal(normalizeUrl('nao-e-url'), '');
+});
+
+test('sameOrigin separa dominios', () => {
+  assert.ok(sameOrigin('https://portal.com/a', 'https://portal.com/b'));
+  assert.ok(!sameOrigin('https://portal.com/a', 'https://outro.com/b'));
+});
+
+test('shouldVisit nunca entra no logout', () => {
+  const opts = {
+    origin: 'https://portal.com',
+    skipPatterns: getConfig().crawl.skipUrlPatterns,
+    visited: new Set(),
+  };
+  assert.ok(!shouldVisit('https://portal.com/logout', opts), 'logout nao pode entrar na fila');
+  assert.ok(!shouldVisit('https://portal.com/sair', opts), 'sair nao pode entrar na fila');
+  assert.ok(!shouldVisit('https://portal.com/conta/encerrar', opts));
+  assert.ok(!shouldVisit('https://portal.com/relatorio.pdf', opts));
+  assert.ok(!shouldVisit('mailto:alguem@portal.com', opts));
+  assert.ok(!shouldVisit('javascript:void(0)', opts));
+});
+
+test('shouldVisit fica no mesmo dominio e nao repete visita', () => {
+  const visited = new Set(['https://portal.com/ja-vi']);
+  const opts = { origin: 'https://portal.com', skipPatterns: [], visited };
+  assert.ok(shouldVisit('https://portal.com/cirurgias', opts));
+  assert.ok(!shouldVisit('https://portal.com/ja-vi', opts));
+  assert.ok(!shouldVisit('https://google.com/busca', opts));
+  assert.ok(shouldVisit('https://google.com/busca', { ...opts, sameOriginOnly: false }));
+});
+
+test('looksLikeData separa pagina de dados de pagina de menu', () => {
+  const keywords = getConfig().crawl.dataKeywords;
+  const tabela = 'TABELAS:\nPaciente | Procedimento | Valor\nMaria | Colecistectomia | 4.200,00';
+  const menu = 'Bem-vindo ao portal. Escolha uma opcao no menu lateral para continuar.';
+  assert.ok(looksLikeData(tabela, { keywords }));
+  assert.ok(!looksLikeData(menu, { keywords }));
+  assert.ok(!looksLikeData('', { keywords }));
+});
+
+test('contentFingerprint iguala paginas com o mesmo conteudo', () => {
+  assert.equal(contentFingerprint('a  b\n c'), contentFingerprint('a b c'));
+  assert.notEqual(contentFingerprint('pagina 1'), contentFingerprint('pagina 2'));
 });
 
 console.log('\nplanilha');

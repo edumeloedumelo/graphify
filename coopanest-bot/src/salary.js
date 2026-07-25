@@ -1,5 +1,5 @@
 import { getConfig } from './config.js';
-import { normalize, toNumber, monthKey, formatBRL } from './format.js';
+import { normalize, toNumber, monthKey } from './format.js';
 
 /** O caso conta para a Sara? Procura os parceiros configurados em varios campos. */
 export function isSalaryCase(item, cfg = getConfig()) {
@@ -73,33 +73,4 @@ function compareMonths(a, b) {
     return match ? Number(`${match[2]}${match[1]}`) : 0;
   };
   return parse(a) - parse(b);
-}
-
-/** Bloco de texto do salario para o WhatsApp. */
-export function formatSalaryReport(summary, cfg = getConfig()) {
-  const beneficiary = cfg.salary?.beneficiary || 'Sara';
-  const lines = [`💰 *Salário da ${beneficiary}*`, ''];
-
-  if (summary.months.length === 0) {
-    lines.push('Nenhuma cirurgia dos parceiros monitorados encontrada ainda.');
-    return lines.join('\n');
-  }
-
-  for (const bucket of summary.months) {
-    lines.push(
-      `*${bucket.month}* — ${bucket.count} cirurgia(s)`,
-      `  Bruto: ${formatBRL(bucket.gross)}`,
-      `  Imposto (${Math.round(summary.taxRate * 100)}%): ${formatBRL(bucket.tax)}`,
-      `  Líquido: ${formatBRL(bucket.net)}`,
-      `  *${beneficiary} (${Math.round(summary.percentage * 100)}%): ${formatBRL(bucket.salary)}*`,
-      '',
-    );
-  }
-
-  lines.push(
-    '——————',
-    `*Total acumulado:* ${formatBRL(summary.totals.salary)} (${summary.totals.count} cirurgia(s))`,
-  );
-
-  return lines.join('\n');
 }

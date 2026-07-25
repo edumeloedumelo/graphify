@@ -1,12 +1,10 @@
 {
-  "botName": "Coopanest Bot",
+  "botName": "Coopanest Sync",
   "timezone": "America/Sao_Paulo",
 
   "sync": {
     "intervalMinutes": 60,
-    "runOnBoot": true,
-    "notifyWhenNoChanges": false,
-    "maxChangesPerMessage": 15
+    "runOnBoot": true
   },
 
   "coopanest": {
@@ -18,26 +16,86 @@
       "username": "input[name='usuario'], input[name='login'], input[type='text']",
       "password": "input[type='password']",
       "submit": "button[type='submit'], input[type='submit']",
-      "loggedIn": "a[href*='sair'], a[href*='logout']",
-      "casesTable": "table"
+      "loggedIn": "a[href*='sair'], a[href*='logout']"
     },
     "navigationTimeoutMs": 45000,
-    "extractWithClaude": true,
     "maxHtmlCharsPerChunk": 45000
+  },
+
+  "crawl": {
+    "maxPages": 60,
+    "maxDepth": 3,
+    "sameOriginOnly": true,
+    "waitAfterLoadMs": 800,
+    "maxPaginationClicks": 20,
+    "onlyPagesWithData": true,
+    "minKeywordMatches": 2,
+    "loginUrlPattern": "login|entrar|signin",
+    "skipUrlPatterns": [
+      "logout",
+      "sair",
+      "encerrar",
+      "sign-?out",
+      "excluir",
+      "delete",
+      "remover",
+      "cancelar",
+      "imprimir",
+      "print",
+      "download",
+      "export",
+      "\\.pdf($|\\?)",
+      "\\.xlsx?($|\\?)",
+      "\\.docx?($|\\?)",
+      "\\.zip($|\\?)",
+      "\\.jpe?g($|\\?)",
+      "\\.png($|\\?)",
+      "^mailto:",
+      "^tel:",
+      "^javascript:"
+    ],
+    "nextPageSelectors": [
+      "a[rel='next']",
+      ".pagination a.next",
+      ".pagination li.next a",
+      "a[aria-label*='róxima' i]",
+      "a[title*='róxima' i]",
+      "button[aria-label*='róxima' i]",
+      "a:has-text('Próxima')",
+      "a:has-text('Proxima')",
+      "button:has-text('Próxima')",
+      "a:has-text('Próximo')",
+      "li.paginate_button.next:not(.disabled) a"
+    ],
+    "dataKeywords": [
+      "paciente",
+      "cirurgia",
+      "procedimento",
+      "anestesi",
+      "guia",
+      "glosa",
+      "convenio",
+      "convênio",
+      "hospital",
+      "valor",
+      "conta",
+      "aviso",
+      "honorario",
+      "honorário",
+      "pagamento"
+    ]
   },
 
   "doctors": [
     {
       "id": "eduardo",
       "name": "Dr. Eduardo",
-      "aliases": ["eduardo", "eduardo melo", "dr eduardo", "dr. eduardo", "emra"],
-      "chatId": "${CHAT_EDUARDO}"
+      "aliases": ["eduardo", "eduardo melo", "dr eduardo", "dr. eduardo", "emra"]
     },
     {
       "id": "fernanda",
       "name": "Dra. Fernanda",
-      "aliases": ["fernanda", "dra fernanda", "dra. fernanda"],
-      "chatId": "${CHAT_FERNANDA}"
+      "aliases": ["fernanda", "dra fernanda", "dra. fernanda"]
     }
   ],
 
@@ -132,13 +190,14 @@
   ],
 
   "prompt": {
-    "role": "Voce e um assistente administrativo de uma equipe de anestesiologia que trabalha com a Coopanest Rio.",
+    "role": "Você é um assistente administrativo de uma equipe de anestesiologia que trabalha com a Coopanest Rio.",
     "rules": [
-      "Nunca invente dados. Se um campo nao aparece na fonte, devolva string vazia.",
-      "Valores monetarios sempre em numero (ponto como separador decimal), sem R$ e sem separador de milhar.",
+      "Nunca invente dados. Se um campo não aparece na página, devolva string vazia.",
+      "Valores monetários sempre em número (ponto como separador decimal), sem R$ e sem separador de milhar.",
       "Datas sempre no formato DD/MM/AAAA.",
       "Status deve ser copiado literalmente do portal (ex.: 'Pago', 'Em recurso de glosa', 'Glosado', 'Aguardando faturamento').",
-      "Responda SEMPRE em portugues do Brasil."
+      "Ignore cabeçalhos, menus, rodapés e totalizadores: só devolva linhas que sejam cirurgias de verdade.",
+      "Responda SEMPRE em português do Brasil."
     ]
   }
 }
