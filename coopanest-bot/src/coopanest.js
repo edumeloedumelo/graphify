@@ -39,12 +39,33 @@ function saveSession(state) {
   }
 }
 
-async function isLoggedIn(page, selectors) {
-  if (!selectors.loggedIn) return false;
+/**
+ * Está logado? Dois sinais, porque o seletor configurado é um chute:
+ * 1. o seletor de "área logada" (link Sair, por exemplo) aparece na página; ou
+ * 2. não há mais campo de senha visível — sinal de que saímos da tela de login.
+ * O segundo evita o falso negativo de um portal cujo link de sair não bate com o seletor.
+ */
+async function looksLoggedIn(page, selectors) {
+  if (selectors.loggedIn) {
+    try {
+      if ((await page.locator(selectors.loggedIn).count()) > 0) return true;
+    } catch {
+      // seletor inválido para esta página: cai no segundo sinal
+    }
+  }
+  return !(await visibleLocator(page, 'input[type="password"]'));
+}
+
+/** Título, URL e um trecho do texto da página — para o erro dizer o que o portal respondeu. */
+async function pageSnapshot(page) {
   try {
-    return (await page.locator(selectors.loggedIn).count()) > 0;
+    const info = await page.evaluate(() => ({
+      titulo: document.title || '',
+      texto: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400),
+    }));
+    return { url: page.url(), ...info };
   } catch {
-    return false;
+    return { url: page.url(), titulo: '', texto: '' };
   }
 }
 
@@ -105,7 +126,7 @@ async function performLogin(page, cfg) {
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
   await page.waitForLoadState('networkidle', { timeout: navigationTimeoutMs }).catch(() => {});
 
-  if (await isLoggedIn(page, selectors)) {
+  if (await looksLoggedIn(page, selectors)) {
     log('sessao anterior ainda valida');
     return;
   }
@@ -154,12 +175,14 @@ async function performLogin(page, cfg) {
     await page.waitForTimeout(2000);
   }
 
-  if (selectors.loggedIn && !(await isLoggedIn(page, selectors))) {
+  if (!(await looksLoggedIn(page, selectors))) {
+    const snap = await pageSnapshot(page);
     throw new Error(
-      `login aparentemente falhou (parei em ${page.url()}) — confira usuario/senha e os seletores no config.json`,
+      `login nao confirmado: continuo vendo campo de senha em ${snap.url} ` +
+        `(titulo: "${snap.titulo}"). A pagina diz: "${snap.texto}"`,
     );
   }
-  log('login concluido');
+  log(`login confirmado (${page.url()})`);
 }
 
 /** URLs semente: as configuradas ou, na falta delas, a página em que o login caiu. */

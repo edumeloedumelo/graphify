@@ -64,9 +64,17 @@ export async function verifyAccess() {
 
   const email = serviceAccountEmail();
   if (!email) {
+    // mostra tamanho e inicio do que chegou — diz na hora se veio truncado,
+    // se e base64 ou se o JSON foi cortado na primeira quebra de linha
+    const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON.trim();
+    const amostra = raw.slice(0, 14).replace(/[^\x20-\x7E]/g, '?');
+    const linhas = raw.split('\n').length;
     return {
       ok: false,
-      motivo: 'GOOGLE_SERVICE_ACCOUNT_JSON invalida — cole o JSON inteiro da service account, ou o base64 dele',
+      motivo:
+        `GOOGLE_SERVICE_ACCOUNT_JSON invalida — recebi ${raw.length} caractere(s) em ${linhas} linha(s), ` +
+        `comecando com "${amostra}…". O valor certo comeca com {"type":"service_account" (JSON inteiro) ` +
+        'ou com "ewog" (base64). Um JSON completo tem ~2300 caracteres.',
     };
   }
 

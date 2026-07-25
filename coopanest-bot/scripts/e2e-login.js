@@ -36,6 +36,7 @@ const cenarios = {
 
 let cenarioAtual = 'incomum';
 let recebido = null;
+let painelSemLogout = false;
 
 const portal = http.createServer((req, res) => {
   let body = '';
@@ -58,8 +59,12 @@ const portal = http.createServer((req, res) => {
     }
 
     if (url.pathname === '/painel') {
+      // painelSemLogout: portal cuja area logada nao tem link "Sair" reconhecivel
+      const menu = painelSemLogout
+        ? '<button onclick="encerrar()">Encerrar sessão</button>'
+        : '<a href="/logout">Sair</a>';
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end('<html><body><a href="/logout">Sair</a><h1>Painel</h1></body></html>');
+      res.end(`<html><body>${menu}<h1>Painel</h1><p>Bem-vindo, Dr. Eduardo.</p></body></html>`);
       return;
     }
 
@@ -125,6 +130,15 @@ await check('ignora campo de texto escondido', 'comCampoOculto', {
   usuario: 'dr.eduardo',
   senha: 'segredo123',
 });
+
+// o seletor 'loggedIn' e um chute: se o portal nao tiver link de logout, o login
+// ainda tem que ser dado como bem-sucedido (senao e falso negativo)
+painelSemLogout = true;
+await check('area logada sem link "Sair" nao e tratada como falha', 'incomum', {
+  usuario: 'dr.eduardo',
+  senha: 'segredo123',
+});
+painelSemLogout = false;
 
 console.log(`\n${failures.length === 0 ? 'todos os passos ok' : `${failures.length} falha(s)`}\n`);
 
