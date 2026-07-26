@@ -3,8 +3,18 @@ import crypto from 'node:crypto';
 import { normalize, toNumber } from './format.js';
 import { getConfig } from './config.js';
 
-/** Identidade estavel de uma cirurgia: paciente + data + procedimento. */
+/**
+ * Identidade estável de uma cirurgia.
+ *
+ * Prioridade: o identificador do próprio portal (CPSA/guia) quando existir —
+ * é o único que sobrevive a correção de nome, remarcação de data ou reajuste
+ * de valor. A composição paciente+data+procedimento fica como reserva, para
+ * casos vindos de páginas sem esse número.
+ */
 export function caseKey(item) {
+  const identificador = String(item.guia || '').replace(/\D/g, '');
+  if (identificador.length >= 4) return `g${identificador}`;
+
   const seed = [normalize(item.paciente), normalize(item.data), normalize(item.procedimento)].join('|');
   return crypto.createHash('sha1').update(seed).digest('hex').slice(0, 10);
 }

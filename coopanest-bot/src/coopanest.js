@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getConfig, STATE_DIR } from './config.js';
-import { extractCases, dedupeCases } from './extractor.js';
+import { extractCases, dedupeCases, normalizeCase } from './extractor.js';
 import { crawlSite, looksLikeData, normalizeUrl } from './crawler.js';
 import { inspectPage } from './inspector.js';
 
@@ -400,12 +400,26 @@ export async function scrapeCases({ debug = false } = {}) {
   if (skipped > 0) log(`${skipped} pagina(s) sem cara de dado — nao gastei IA com elas`);
 
   const collected = [];
+  let lidosDaTabela = 0;
+  let paginasComIA = 0;
+
   for (const item of withData) {
+    // 1) tabela lida direto do DOM — caminho normal, sem IA
+    if (item.casos?.length) {
+      lidosDaTabela += item.casos.length;
+      collected.push(...item.casos.map((caso) => normalizeCase(caso)).filter(Boolean));
+      continue;
+    }
+
+    // 2) sem tabela reconhecida: aí sim o Claude interpreta o texto
+    paginasComIA += 1;
     const result = await extractCases({ label: item.url, content: item.content });
-    if (result.cases.length) log(`${result.cases.length} cirurgia(s) em ${item.url}`);
+    if (result.cases.length) log(`${result.cases.length} cirurgia(s) em ${item.url} (via IA)`);
     collected.push(...result.cases);
     warnings.push(...result.warnings);
   }
+
+  log(`${lidosDaTabela} caso(s) lidos direto da tabela; ${paginasComIA} pagina(s) precisaram de IA`);
 
   return {
     cases: dedupeCases(collected),
@@ -413,6 +427,8 @@ export async function scrapeCases({ debug = false } = {}) {
     pages: pages.map((item) => item.url),
     visited,
     pagesAnalyzed: withData.length,
+    lidosDaTabela,
+    paginasComIA,
     ...diagnosticoLinks,
   };
 }

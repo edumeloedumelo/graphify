@@ -192,6 +192,40 @@ check('o campo de periodo ficou com os 2 anos', () => {
   assert.equal(valorPeriodo, periodoDesejado(2));
 });
 
+// --- leitura direta da tabela, sem IA ---
+const { casosDaPagina, linhasParaCasos } = await import('../src/tabela.js');
+const { caseKey } = await import('../src/diff.js');
+
+await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
+const { casos: casosTabela } = await casosDaPagina(page);
+
+check('le as 10 linhas da tabela direto do DOM', () => {
+  assert.equal(casosTabela.length, 10, `leu ${casosTabela.length}`);
+});
+
+check('casa cada coluna pelo cabecalho', () => {
+  const primeiro = casosTabela[0];
+  assert.match(primeiro.guia, /^\d{10}$/, `guia: ${primeiro.guia}`);
+  assert.equal(primeiro.status, 'Aguardando Pagamento');
+  assert.equal(primeiro.statusOriginal, 'Aguardando Pagamento');
+  assert.match(primeiro.paciente, /^PACIENTE /);
+  assert.match(primeiro.data, /^\d{2}\/\d{2}\/\d{4}$/);
+  assert.equal(typeof primeiro.valorBruto, 'number');
+});
+
+check('a chave unica usa o CPSA, nao a composicao', () => {
+  const chave = caseKey(casosTabela[0]);
+  assert.equal(chave, `g${casosTabela[0].guia}`);
+  // mesmo caso com nome corrigido continua sendo o mesmo registro
+  const corrigido = { ...casosTabela[0], paciente: 'NOME CORRIGIDO', data: '01/01/2020' };
+  assert.equal(caseKey(corrigido), chave);
+});
+
+check('tabela com cabecalho irreconhecivel nao vira caso', () => {
+  const lixo = { titulos: ['Coluna A', 'Coluna B'], linhas: [{ valores: ['x', 'y'], href: '' }] };
+  assert.equal(linhasParaCasos(lixo), null);
+});
+
 // --- paginacao ---
 const { percorrerPaginas } = await import('../src/sweep.js');
 const comum = { rotuloResultados: 'Mostrando', maxPaginas: 40, esperaMs: 120, log: () => {} };

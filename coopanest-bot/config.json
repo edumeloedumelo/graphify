@@ -136,6 +136,7 @@
     "historyTab": "Historico",
     "caseColumns": [
       "ID",
+      "Guia (CPSA)",
       "Medico",
       "Paciente",
       "Procedimento",
@@ -143,6 +144,7 @@
       "Hospital",
       "Convenio",
       "Status",
+      "Status Original",
       "Valor Bruto",
       "Valor Pago",
       "Valor a Receber",
@@ -150,6 +152,7 @@
       "Recurso de Glosa",
       "Parceiro/Equipe",
       "Observacoes",
+      "URL",
       "Primeira Leitura",
       "Ultima Atualizacao",
       "Mudancas"

@@ -4,6 +4,9 @@ import { getConfig } from './config.js';
 import { toNumber, formatDate, normalize } from './format.js';
 
 const EMPTY_CASE = {
+  guia: '',
+  url: '',
+  statusOriginal: '',
   paciente: '',
   medico: '',
   procedimento: '',
@@ -116,7 +119,12 @@ export function dedupeCases(cases = []) {
   const score = (item) => Object.values(item).filter((value) => value !== '' && value !== null).length;
 
   for (const item of cases) {
-    const key = [normalize(item.paciente), normalize(item.data), normalize(item.procedimento)].join('|');
+    // mesma prioridade da chave de identidade: o numero do portal manda
+    const identificador = String(item.guia || '').replace(/\D/g, '');
+    const key =
+      identificador.length >= 4
+        ? `g${identificador}`
+        : [normalize(item.paciente), normalize(item.data), normalize(item.procedimento)].join('|');
     const existing = seen.get(key);
     if (!existing) {
       seen.set(key, item);

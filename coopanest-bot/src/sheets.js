@@ -115,6 +115,11 @@ async function getClient() {
 /** Nome da coluna -> campo do caso. Aceita variacoes de acento/caixa do config.json. */
 const COLUMN_FIELDS = {
   id: 'id',
+  'guia (cpsa)': 'guia',
+  guia: 'guia',
+  cpsa: 'guia',
+  'status original': 'statusOriginal',
+  url: 'url',
   medico: 'medico',
   paciente: 'paciente',
   procedimento: 'procedimento',

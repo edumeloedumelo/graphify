@@ -9,6 +9,7 @@
  * percorre todas as páginas da tabela.
  */
 import { extractPageContent, contentFingerprint } from './pagecontent.js';
+import { casosDaPagina } from './tabela.js';
 
 const RANGE_RE = /(\d{2}\/\d{2}\/\d{4})\s*[-–—]\s*(\d{2}\/\d{2}\/\d{4})/;
 
@@ -317,10 +318,12 @@ export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esp
     assinaturas.add(assinatura);
 
     const conteudo = await extractPageContent(page);
+    // lê a tabela direto do DOM: não gasta IA e não perde linha
+    const { casos } = await casosDaPagina(page);
     const titulo = `${label} — pagina ${numero}`;
-    paginas.push({ url: titulo, content: conteudo });
+    paginas.push({ url: titulo, content: conteudo, casos });
     onPage?.(titulo, conteudo);
-    log(`${label}: pagina ${numero}/${limite} com ${linhas} linha(s)`);
+    log(`${label}: pagina ${numero}/${limite} — ${linhas} linha(s), ${casos.length} caso(s) lido(s) da tabela`);
 
     if (numero === limite) {
       completou = true;
