@@ -134,7 +134,7 @@ app.get('/inspecionar', async (req, res) => {
 
   try {
     const { inspectPortal } = await import('./coopanest.js');
-    return res.json(await inspectPortal(urls));
+    return res.json(await inspectPortal(urls, { abrir: String(req.query.abrir || '') }));
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

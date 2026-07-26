@@ -11,6 +11,66 @@
  */
 
 /**
+ * Clica num elemento antes da inspeção — para fotografar um calendário ou
+ * dropdown já aberto. Aceita id exato ou texto visível.
+ */
+export async function abrirElemento(page, alvo) {
+  if (!alvo) return { clicou: false };
+
+  const marcou = await page.evaluate((termo) => {
+    const visivel = (element) => element && element.offsetParent !== null;
+    const texto = (element) => (element.innerText || '').replace(/\s+/g, ' ').trim();
+
+    const porId = document.getElementById(termo);
+    const candidatos = [...document.querySelectorAll('button, a, div, span, [role="button"], [role="combobox"]')];
+    const porTexto = candidatos
+      .filter((element) => visivel(element) && texto(element).includes(termo))
+      .sort((a, b) => texto(a).length - texto(b).length)[0];
+
+    const alvoElemento = (porId && visivel(porId) ? porId : null) || porTexto;
+    if (!alvoElemento) return false;
+    alvoElemento.setAttribute('data-inspecao', 'abrir');
+    return true;
+  }, alvo);
+
+  if (!marcou) return { clicou: false, motivo: `nao achei "${alvo}" na pagina` };
+
+  await page.locator('[data-inspecao="abrir"]').first().click({ timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  return { clicou: true, alvo };
+}
+
+/**
+ * Descreve a forma de um JSON sem expor valores — só chaves e tamanhos.
+ * Assim dá para desenhar a chamada de API sem passar dado de paciente adiante.
+ */
+export function formaDoJson(texto) {
+  let dados;
+  try {
+    dados = JSON.parse(texto);
+  } catch {
+    return 'nao e JSON';
+  }
+
+  const descrever = (valor, profundidade = 0) => {
+    if (Array.isArray(valor)) {
+      const primeiro = valor[0];
+      const dentro = primeiro && typeof primeiro === 'object' ? Object.keys(primeiro).join(', ') : typeof primeiro;
+      return `array(${valor.length}) de { ${dentro} }`;
+    }
+    if (valor && typeof valor === 'object') {
+      if (profundidade >= 1) return `{ ${Object.keys(valor).join(', ')} }`;
+      return Object.entries(valor)
+        .map(([chave, item]) => `${chave}: ${descrever(item, profundidade + 1)}`)
+        .join(' | ');
+    }
+    return typeof valor;
+  };
+
+  return descrever(dados);
+}
+
+/**
  * @param {import('playwright').Page} page
  * @returns {Promise<object>} estrutura da página, pronta para colar numa conversa
  */

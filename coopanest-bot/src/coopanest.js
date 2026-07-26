@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getConfig, STATE_DIR } from './config.js';
 import { extractCases, dedupeCases, normalizeCase } from './extractor.js';
 import { crawlSite, looksLikeData, normalizeUrl } from './crawler.js';
-import { inspectPage } from './inspector.js';
+import { inspectPage, abrirElemento, formaDoJson } from './inspector.js';
 
 const SESSION_FILE = path.join(STATE_DIR, 'coopanest-session.json');
 
@@ -437,7 +437,7 @@ export async function scrapeCases({ debug = false } = {}) {
  * Loga no portal e devolve a estrutura real das páginas pedidas.
  * Serve para escrever seletores com base no DOM de verdade, em vez de chutar.
  */
-export async function inspectPortal(urls = []) {
+export async function inspectPortal(urls = [], { abrir = '' } = {}) {
   const cfg = getConfig();
   const chromium = await loadPlaywright();
   const timeout = cfg.coopanest.navigationTimeoutMs || 45_000;
@@ -455,8 +455,34 @@ export async function inspectPortal(urls = []) {
   context.setDefaultTimeout(timeout);
 
   const relatorios = [];
+  const chamadas = [];
   try {
     const page = await context.newPage();
+
+    // A tela e um SPA: os dados vem de uma API JSON propria. Registrar essas
+    // chamadas mostra se da para pedir periodo e pagina como parametro, em vez
+    // de manipular calendario e botao. So a FORMA do JSON e guardada -- nunca
+    // os valores, que teriam nome de paciente.
+    page.on('response', async (resposta) => {
+      const requisicao = resposta.request();
+      if (!['xhr', 'fetch'].includes(requisicao.resourceType())) return;
+
+      const limpa = new URL(resposta.url());
+      for (const parametro of [...limpa.searchParams.keys()]) {
+        if (/token|senha|password|secret|key|auth/i.test(parametro)) limpa.searchParams.set(parametro, '***');
+      }
+
+      let forma = '';
+      try {
+        if ((resposta.headers()['content-type'] || '').includes('json')) {
+          forma = formaDoJson(await resposta.text());
+        }
+      } catch {
+        forma = '(corpo indisponivel)';
+      }
+
+      chamadas.push({ metodo: requisicao.method(), url: limpa.toString(), status: resposta.status(), forma });
+    });
     await performLogin(page, cfg);
     saveSession(await context.storageState());
 
@@ -468,7 +494,9 @@ export async function inspectPortal(urls = []) {
         }
         await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
         await page.waitForTimeout(cfg.crawl?.waitAfterLoadMs ?? 1500);
-        relatorios.push(await inspectPage(page));
+        const aberto = abrir ? await abrirElemento(page, abrir) : null;
+        const relatorio = await inspectPage(page);
+        relatorios.push(aberto ? { ...relatorio, aberto } : relatorio);
       } catch (err) {
         relatorios.push({ url, erro: err.message });
       }
@@ -478,5 +506,10 @@ export async function inspectPortal(urls = []) {
     await browser.close().catch(() => {});
   }
 
-  return relatorios;
+  return {
+    paginas: relatorios,
+    // chamadas de API observadas — se houver uma listagem aqui, o caminho
+    // direto e chamar essa URL com periodo e pagina como parametro
+    api: chamadas.filter((chamada) => chamada.forma && chamada.forma !== 'nao e JSON').slice(0, 25),
+  };
 }
