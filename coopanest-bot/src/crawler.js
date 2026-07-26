@@ -192,6 +192,7 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
   const warnings = [];
   const linksVistos = new Set();
   const linksIgnorados = new Map();
+  let diagnosticoSweep = null;
 
   const queue = seeds
     .map((url) => normalizeUrl(url))
@@ -229,6 +230,7 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
       const sweep = await sweepListing(page, { cfg, log, onPage });
       pagesHere = sweep.paginas;
       warnings.push(...sweep.avisos);
+      diagnosticoSweep = sweep.diagnostico;
       links = await collectLinks(page);
     } else {
       ({ results: pagesHere, links } = await readWithPagination(page, url, { crawl, timeout, onPage }));
@@ -271,6 +273,7 @@ export async function crawlSite(page, seeds, { onPage, log = () => {} } = {}) {
     linksEncontrados: [...linksVistos].slice(0, 25),
     totalLinks: linksVistos.size,
     linksIgnorados: [...linksIgnorados.entries()].slice(0, 12).map(([url, motivo]) => `${url} → ${motivo}`),
+    sweep: diagnosticoSweep,
   };
 }
 

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { getConfig, STATE_DIR } from './config.js';
 import { extractCases, dedupeCases } from './extractor.js';
 import { crawlSite, looksLikeData, normalizeUrl } from './crawler.js';
+import { inspectPage } from './inspector.js';
 
 const SESSION_FILE = path.join(STATE_DIR, 'coopanest-session.json');
 
@@ -378,6 +379,7 @@ export async function scrapeCases({ debug = false } = {}) {
       totalLinks: result.totalLinks,
       linksEncontrados: result.linksEncontrados,
       linksIgnorados: result.linksIgnorados,
+      sweep: result.sweep,
     };
 
     log(`varredura terminou: ${visited.length} URL(s) visitada(s), ${pages.length} pagina(s) com conteudo`);
@@ -413,4 +415,52 @@ export async function scrapeCases({ debug = false } = {}) {
     pagesAnalyzed: withData.length,
     ...diagnosticoLinks,
   };
+}
+
+/**
+ * Loga no portal e devolve a estrutura real das páginas pedidas.
+ * Serve para escrever seletores com base no DOM de verdade, em vez de chutar.
+ */
+export async function inspectPortal(urls = []) {
+  const cfg = getConfig();
+  const chromium = await loadPlaywright();
+  const timeout = cfg.coopanest.navigationTimeoutMs || 45_000;
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
+  });
+  const context = await browser.newContext({
+    storageState: readSession() || undefined,
+    viewport: { width: 1440, height: 900 },
+    locale: 'pt-BR',
+  });
+  context.setDefaultTimeout(timeout);
+
+  const relatorios = [];
+  try {
+    const page = await context.newPage();
+    await performLogin(page, cfg);
+    saveSession(await context.storageState());
+
+    const alvos = urls.length ? urls : seedUrls(cfg, page);
+    for (const url of alvos) {
+      try {
+        if (normalizeUrl(page.url()) !== normalizeUrl(url)) {
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+        }
+        await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
+        await page.waitForTimeout(cfg.crawl?.waitAfterLoadMs ?? 1500);
+        relatorios.push(await inspectPage(page));
+      } catch (err) {
+        relatorios.push({ url, erro: err.message });
+      }
+    }
+  } finally {
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+
+  return relatorios;
 }

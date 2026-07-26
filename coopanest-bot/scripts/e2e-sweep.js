@@ -59,10 +59,17 @@ function render() {
   document.getElementById('rodape').innerHTML =
     '<span>Mostrando</span> <b>' + (total ? inicio + 1 : 0) + '</b> <span>a</span> <b>' +
     Math.min(inicio + porPagina, total) + '</b> <span>de</span> <b>' + total + '</b> <span>resultados</span>';
+  const ultima = pagina >= paginas;
   document.getElementById('paginacao').innerHTML =
-    Array.from({ length: paginas }, (_, i) => '<button class="pg">' + (i + 1) + '</button>').join('');
+    Array.from({ length: paginas }, (_, i) => '<button class="pg">' + (i + 1) + '</button>').join('') +
+    '<button class="next"' + (ultima ? ' disabled' : '') + ' aria-label="Próxima página">›</button>';
   for (const botao of document.querySelectorAll('.pg')) {
     botao.onclick = () => { pagina = Number(botao.innerText); render(); };
+  }
+  const proxima = document.querySelector('.next');
+  if (proxima && !ultima) {
+    // travado: o clique nao avanca, simulando paginacao quebrada
+    proxima.onclick = () => { if (!window.__travado) pagina += 1; render(); };
   }
 }
 
@@ -183,6 +190,37 @@ check('leu as 36 guias, inclusive as canceladas', () => {
 const valorPeriodo = await page.locator('#periodo').inputValue();
 check('o campo de periodo ficou com os 2 anos', () => {
   assert.equal(valorPeriodo, periodoDesejado(2));
+});
+
+// --- paginacao ---
+const { percorrerPaginas } = await import('../src/sweep.js');
+const comum = { rotuloResultados: 'Mostrando', maxPaginas: 40, esperaMs: 120, log: () => {} };
+
+await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
+const percurso = await percorrerPaginas(page, { ...comum, label: 'percurso' });
+
+check('percorre ate a ultima pagina e marca como completa', () => {
+  assert.equal(percurso.paginasVisitadas, 4, `visitou ${percurso.paginasVisitadas}`);
+  assert.equal(percurso.completou, true, `motivo: ${percurso.motivoParada}`);
+});
+
+check('cada pagina tem conteudo distinto', () => {
+  const assinaturas = new Set(percurso.paginas.map((p) => p.content));
+  assert.equal(assinaturas.size, 4, 'houve pagina repetida');
+});
+
+await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => {
+  window.__travado = true;
+  // tambem neutraliza os numeros, para nao existir caminho alternativo
+  for (const botao of document.querySelectorAll('.pg')) botao.onclick = null;
+});
+const travado = await percorrerPaginas(page, { ...comum, label: 'travado' });
+
+check('paginacao travada nao e reportada como completa', () => {
+  assert.equal(travado.completou, false);
+  assert.ok(travado.motivoParada, 'deveria dizer por que parou');
+  assert.ok(travado.paginasVisitadas < 4, `visitou ${travado.paginasVisitadas}, deveria ter parado antes`);
 });
 
 console.log(`\n${failures.length === 0 ? 'todos os passos ok' : `${failures.length} falha(s)`}\n`);

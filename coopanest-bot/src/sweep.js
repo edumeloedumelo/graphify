@@ -217,25 +217,82 @@ export async function escolherOpcao(page, texto) {
   return true;
 }
 
-/** Percorre todas as páginas da tabela clicando nos números da paginação. */
+/**
+ * Assinatura da página: identificadores das primeiras linhas da tabela.
+ * Serve para provar que o clique realmente trocou o conteúdo — comparar o texto
+ * inteiro falha quando só a ordem muda, e comparar nada deixa entrar em loop.
+ */
+async function assinaturaLinhas(page) {
+  return page.evaluate(() => {
+    const linhas = [...document.querySelectorAll('table tbody tr, [role="row"]')].slice(0, 5);
+    const chaves = linhas.map((linha) => {
+      const celulas = [...linha.querySelectorAll('td, [role="cell"]')].slice(0, 3);
+      return celulas.map((celula) => (celula.innerText || '').replace(/\s+/g, ' ').trim()).join('|');
+    });
+    return { assinatura: chaves.join(' /// '), linhas: document.querySelectorAll('table tbody tr, [role="row"]').length };
+  });
+}
+
+/**
+ * Procura o controle de "próxima página", em várias convenções:
+ * rel=next, aria-label, classe .next, DataTables, ícone de seta e texto.
+ * Devolve null quando não existe ou está desabilitado (última página).
+ */
+async function proximoControle(page) {
+  const achou = await page.evaluate(() => {
+    const visivel = (element) => element && element.offsetParent !== null;
+    const desabilitado = (element) => {
+      const classe = typeof element.className === 'string' ? element.className : '';
+      return (
+        element.hasAttribute('disabled') ||
+        element.getAttribute('aria-disabled') === 'true' ||
+        /\bdisabled\b/i.test(classe) ||
+        Boolean(element.closest('.disabled, [aria-disabled="true"]'))
+      );
+    };
+
+    const candidatos = [
+      ...document.querySelectorAll(
+        'a[rel="next"], .pagination a.next, .pagination li.next a, li.paginate_button.next, ' +
+          '.paginate_button.next, [class*="next" i], [aria-label*="rox" i], [aria-label*="next" i], ' +
+          '[title*="rox" i], [title*="next" i], button, a',
+      ),
+    ];
+
+    const porTexto = (element) => {
+      const alvo = (element.innerText || '').trim().toLowerCase();
+      return ['próxima', 'proxima', 'próximo', 'proximo', 'next', '›', '»', '>'].includes(alvo);
+    };
+    const porAtributo = (element) => {
+      const alvo = `${element.getAttribute('aria-label') || ''} ${element.getAttribute('title') || ''} ${
+        element.getAttribute('rel') || ''
+      } ${typeof element.className === 'string' ? element.className : ''}`.toLowerCase();
+      return /next|próx|prox|seguinte/.test(alvo);
+    };
+
+    const alvo = candidatos.find((element) => visivel(element) && !desabilitado(element) && (porTexto(element) || porAtributo(element)));
+    if (!alvo) {
+      // existe controle, mas desabilitado? entao e a ultima pagina
+      const bloqueado = candidatos.some((element) => visivel(element) && desabilitado(element) && (porTexto(element) || porAtributo(element)));
+      return bloqueado ? 'ultima' : null;
+    }
+
+    document.querySelectorAll('[data-sweep="proxima"]').forEach((el) => el.removeAttribute('data-sweep'));
+    alvo.setAttribute('data-sweep', 'proxima');
+    return 'ok';
+  });
+
+  if (achou === 'ok') return page.locator('[data-sweep="proxima"]').first();
+  return achou; // 'ultima' ou null
+}
+
+/** Percorre todas as páginas da tabela: botão "próxima" e, se não houver, os números. */
 export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esperaMs, label, onPage, log }) {
   const paginas = [];
-  const vistos = new Set();
+  const assinaturas = new Set();
+  let completou = false;
+  let motivoParada = '';
 
-  const capturar = async (numero) => {
-    const conteudo = await extractPageContent(page);
-    const digital = contentFingerprint(conteudo);
-    if (vistos.has(digital)) return false;
-    vistos.add(digital);
-    const titulo = `${label} — pagina ${numero}`;
-    paginas.push({ url: titulo, content: conteudo });
-    onPage?.(titulo, conteudo);
-    return true;
-  };
-
-  // o texto da contagem costuma vir quebrado em varios elementos
-  // ("<span>Mostrando</span> <b>1</b> a <b>10</b> de <b>36</b>"), entao a busca
-  // e feita no texto corrido da pagina, nao em um elemento so
   const contagemTexto = await page.evaluate((marcador) => {
     const corpo = (document.body?.innerText || '').replace(/\s+/g, ' ');
     const posicao = corpo.indexOf(marcador);
@@ -243,37 +300,72 @@ export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esp
   }, rotuloResultados);
 
   const contagem = lerContagem(contagemTexto);
-  let estimativa = contagem ? contagem.paginas : 1;
-  if (contagem && !contagem.confiavel) {
-    // rodape numa pagina do meio/fim: conta os botoes em vez de deduzir
-    estimativa = Math.max(await maiorBotaoPagina(page), 1);
-  }
-  const total = Math.min(estimativa, maxPaginas);
-  if (contagem) log(`${label}: ${contagem.total} resultado(s) em ${total} pagina(s)`);
+  let esperadas = contagem ? contagem.paginas : 0;
+  if (contagem && !contagem.confiavel) esperadas = Math.max(await maiorBotaoPagina(page), 1);
+  const limite = Math.min(esperadas || maxPaginas, maxPaginas);
 
-  await capturar(1);
+  if (contagem) log(`${label}: ${contagem.total} resultado(s), ~${esperadas} pagina(s)`);
 
-  for (let numero = 2; numero <= total; numero += 1) {
-    const clicou = await marcar(page, 'pagina', {
-      tipo: 'folhaExata',
-      texto: String(numero),
-      seletores: 'button, a, li, span, div',
-    });
+  for (let numero = 1; numero <= limite; numero += 1) {
+    const { assinatura, linhas } = await assinaturaLinhas(page);
+
+    if (assinaturas.has(assinatura)) {
+      motivoParada = `pagina ${numero} repetiu o conteudo da anterior`;
+      log(`${label}: ${motivoParada}`);
+      break;
+    }
+    assinaturas.add(assinatura);
+
+    const conteudo = await extractPageContent(page);
+    const titulo = `${label} — pagina ${numero}`;
+    paginas.push({ url: titulo, content: conteudo });
+    onPage?.(titulo, conteudo);
+    log(`${label}: pagina ${numero}/${limite} com ${linhas} linha(s)`);
+
+    if (numero === limite) {
+      completou = true;
+      break;
+    }
+
+    // 1) botão "próxima"; 2) número da próxima página
+    const proxima = await proximoControle(page);
+    let clicou = false;
+
+    if (proxima === 'ultima') {
+      completou = true;
+      motivoParada = 'botao de proxima pagina desabilitado';
+      break;
+    }
+    if (proxima) {
+      await proxima.click({ timeout: 10_000 }).then(() => { clicou = true; }).catch(() => {});
+    }
+
     if (!clicou) {
-      log(`${label}: nao achei o botao da pagina ${numero}, parando`);
+      const marcou = await marcar(page, 'pagina', {
+        tipo: 'folhaExata',
+        texto: String(numero + 1),
+        seletores: 'button, a, li, span, div',
+      });
+      if (marcou) {
+        await page
+          .locator('[data-sweep="pagina"]')
+          .first()
+          .click({ timeout: 10_000 })
+          .then(() => { clicou = true; })
+          .catch(() => {});
+      }
+    }
+
+    if (!clicou) {
+      motivoParada = `nao achei como ir para a pagina ${numero + 1}`;
+      log(`${label}: ${motivoParada}`);
       break;
     }
 
-    await page.locator('[data-sweep="pagina"]').first().click({ timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(esperaMs);
-
-    if (!(await capturar(numero))) {
-      log(`${label}: pagina ${numero} repetiu o conteudo, parando`);
-      break;
-    }
   }
 
-  return paginas;
+  return { paginas, completou, paginasVisitadas: paginas.length, esperadas, motivoParada };
 }
 
 /**
@@ -298,8 +390,12 @@ export async function sweepListing(page, { cfg, log = () => {}, onPage } = {}) {
     log,
   };
 
+  const percursos = [];
+
   // 1) sem filtro: costuma trazer tudo de uma vez
-  paginas.push(...(await percorrerPaginas(page, { ...comum, label: 'sem filtro' })));
+  const semFiltro = await percorrerPaginas(page, { ...comum, label: 'sem filtro' });
+  paginas.push(...semFiltro.paginas);
+  percursos.push({ label: 'sem filtro', ...semFiltro, paginas: undefined });
 
   // 2) uma passada por opção do filtro — status que o portal esconde no
   //    padrão (cancelada, por exemplo) só aparece assim
@@ -309,12 +405,29 @@ export async function sweepListing(page, { cfg, log = () => {}, onPage } = {}) {
       avisos.push(`nao consegui selecionar a opcao "${opcao}"`);
       continue;
     }
-    paginas.push(...(await percorrerPaginas(page, { ...comum, label: `filtro: ${opcao}` })));
+    const percurso = await percorrerPaginas(page, { ...comum, label: `filtro: ${opcao}` });
+    paginas.push(...percurso.paginas);
+    percursos.push({ label: `filtro: ${opcao}`, ...percurso, paginas: undefined });
     // reabre o dropdown para a próxima opção
     await opcoesDoFiltro(page, s.rotuloFiltro || 'Selecione o item', () => {});
   }
 
-  return { paginas, avisos };
+  const incompletos = percursos.filter((item) => !item.completou);
+  for (const item of incompletos) avisos.push(`${item.label}: varredura incompleta — ${item.motivoParada}`);
+
+  return {
+    paginas,
+    avisos,
+    diagnostico: {
+      periodoAplicado: periodo.ok,
+      periodoDesejado: periodo.desejado || periodoDesejado(s.anosDeHistorico ?? 2),
+      periodoNoPortal: periodo.depois || '',
+      paginasVisitadas: percursos.reduce((soma, item) => soma + item.paginasVisitadas, 0),
+      percursos,
+      completou: incompletos.length === 0,
+      filtrosVarridos: opcoes,
+    },
+  };
 }
 
 /** A tela tem cara de listagem com filtros? */

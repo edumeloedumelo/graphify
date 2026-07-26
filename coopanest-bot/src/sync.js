@@ -123,6 +123,18 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
     report.linksEncontrados = scraped.linksEncontrados;
     report.linksIgnorados = scraped.linksIgnorados;
 
+    // paginas da TABELA (a paginacao acontece dentro de uma unica URL, entao
+    // contar URLs visitadas dava sempre 1 mesmo com a varredura funcionando)
+    const sweep = scraped.sweep || null;
+    report.urlsVisitadas = report.pagesVisited;
+    report.pagesVisited = sweep?.paginasVisitadas ?? report.pagesVisited;
+    report.paginationDetected = Boolean(sweep && sweep.paginasVisitadas > 1);
+    report.periodApplied = sweep?.periodoAplicado ?? false;
+    report.periodRequested = sweep?.periodoDesejado || '';
+    report.periodInPortal = sweep?.periodoNoPortal || '';
+    report.filtrosVarridos = sweep?.filtrosVarridos || [];
+    report.percursos = sweep?.percursos || [];
+
     const applied = await applyCases(scraped.cases);
     report.added = applied.added.length;
     report.updated = applied.updated.length;
@@ -144,6 +156,21 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
       };
     }
 
+    report.uniqueCasesFound = Object.keys(applied.merged).length;
+
+    // completa so quando a leitura foi comprovadamente integral: login ok,
+    // periodo aplicado, toda paginacao percorrida e nenhum erro no caminho
+    const varreduraIntegral = Boolean(sweep?.completou);
+    report.syncComplete =
+      varreduraIntegral && report.periodApplied && report.warnings.length === 0 && !report.error;
+    if (!report.syncComplete) {
+      report.syncIncompleteReason = !report.periodApplied
+        ? 'filtro de periodo nao aplicado — o portal listou apenas o intervalo padrao'
+        : !varreduraIntegral
+          ? 'a varredura nao chegou comprovadamente a ultima pagina'
+          : 'houve avisos durante a leitura';
+    }
+
     report.durationSeconds = Math.round((Date.now() - startedAt) / 1000);
     setValue('lastSync', {
       at: timestamp,
@@ -159,7 +186,18 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
       linksEncontrados: report.linksEncontrados,
       linksIgnorados: report.linksIgnorados,
       planilha: report.planilha,
+      syncComplete: report.syncComplete,
+      syncIncompleteReason: report.syncIncompleteReason,
+      periodApplied: report.periodApplied,
+      periodRequested: report.periodRequested,
+      periodInPortal: report.periodInPortal,
+      paginationDetected: report.paginationDetected,
+      uniqueCasesFound: report.uniqueCasesFound,
+      urlsVisitadas: report.urlsVisitadas,
+      percursos: report.percursos,
     });
+    setValue('lastSyncAttempt', timestamp);
+    if (report.syncComplete) setValue('lastSuccessfulFullSync', timestamp);
 
     console.log(
       formatReport({ added: applied.added, updated: applied.updated, unchanged: report.unchanged, timestamp }),

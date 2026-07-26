@@ -120,6 +120,26 @@ ${sheets.sheetUrl() ? `<a class="sec" href="${sheets.sheetUrl()}">Abrir a planil
 </body></html>`;
 }
 
+// estrutura real do DOM do portal — para escrever seletores sem chutar
+app.get('/inspecionar', async (req, res) => {
+  const secret = process.env.SYNC_SECRET;
+  if (secret && (req.get('x-sync-secret') || req.query.secret) !== secret) {
+    return res.status(401).json({ error: 'segredo invalido' });
+  }
+
+  const urls = String(req.query.url || '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean);
+
+  try {
+    const { inspectPortal } = await import('./coopanest.js');
+    return res.json(await inspectPortal(urls));
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/sync', (req, res) => dispararSync(req, res));
 
 // versão para abrir no navegador do celular — GET não dá para fazer com POST
