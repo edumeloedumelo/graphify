@@ -1,49 +1,34 @@
 /**
- * Relatório do DOM real de uma página do portal.
+ * Relatório da ESTRUTURA de uma página do portal — nunca do seu conteúdo.
  *
  * Existe porque o ambiente onde este código é desenvolvido não alcança o
- * portal: sem isso, todo seletor seria chute. O relatório sai por
- * GET /inspecionar e traz o que é preciso para escrever seletores de verdade —
- * campos, botões, candidatos a paginação e a filtros de data.
+ * portal: sem isso, todo seletor seria chute.
  *
- * Nunca inclui valores digitados em campos de senha nem o conteúdo das linhas
- * da tabela: só estrutura.
+ * REGRA DE PRIVACIDADE. A versão anterior deste arquivo prometia no cabeçalho
+ * não devolver conteúdo de linha e devolvia: `trechoDoTexto` saía com nome de
+ * paciente, CPSA, data, valor e convênio. As três regras abaixo existem para
+ * que isso não dependa de disciplina de quem edita:
+ *
+ *  1. nada dentro de <tbody> contribui com texto — linha de tabela é dado de
+ *     paciente por definição;
+ *  2. todo texto que sai daqui passa por `mascarar`: data vira DD/MM/AAAA,
+ *     dinheiro vira R$ N, sequência de 4+ dígitos vira NNNN;
+ *  3. de elementos dentro de linhas saem apenas atributos estruturais — tag,
+ *     role, classe, ícone — e nunca o valor de aria-label ou title.
  */
 
-/**
- * Clica num elemento antes da inspeção — para fotografar um calendário ou
- * dropdown já aberto. Aceita id exato ou texto visível.
- */
-export async function abrirElemento(page, alvo) {
-  if (!alvo) return { clicou: false };
-
-  const marcou = await page.evaluate((termo) => {
-    const visivel = (element) => element && element.offsetParent !== null;
-    const texto = (element) => (element.innerText || '').replace(/\s+/g, ' ').trim();
-
-    const porId = document.getElementById(termo);
-    const candidatos = [...document.querySelectorAll('button, a, div, span, [role="button"], [role="combobox"]')];
-    const porTexto = candidatos
-      .filter((element) => visivel(element) && texto(element).includes(termo))
-      .sort((a, b) => texto(a).length - texto(b).length)[0];
-
-    const alvoElemento = (porId && visivel(porId) ? porId : null) || porTexto;
-    if (!alvoElemento) return false;
-    alvoElemento.setAttribute('data-inspecao', 'abrir');
-    return true;
-  }, alvo);
-
-  if (!marcou) return { clicou: false, motivo: `nao achei "${alvo}" na pagina` };
-
-  await page.locator('[data-inspecao="abrir"]').first().click({ timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(1200);
-  return { clicou: true, alvo };
+/** Datas, valores e números longos saem mascarados. */
+export function mascarar(texto) {
+  return String(texto || '')
+    .replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, 'DD/MM/AAAA')
+    .replace(/R\$\s*[\d.,]+/gi, 'R$ N')
+    .replace(/\d{4,}/g, 'NNNN')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
 }
 
-/**
- * Descreve a forma de um JSON sem expor valores — só chaves e tamanhos.
- * Assim dá para desenhar a chamada de API sem passar dado de paciente adiante.
- */
+/** Descreve a forma de um JSON sem expor valores — só chaves e tamanhos. */
 export function formaDoJson(texto) {
   let dados;
   try {
@@ -70,14 +55,75 @@ export function formaDoJson(texto) {
   return descrever(dados);
 }
 
-/**
- * @param {import('playwright').Page} page
- * @returns {Promise<object>} estrutura da página, pronta para colar numa conversa
- */
-export async function inspectPage(page) {
+/** Clica num elemento (por id ou texto) para abrir popover/menu antes de inspecionar. */
+export async function abrirElemento(page, alvo) {
+  if (!alvo) return { clicou: false };
+
+  const marcou = await page.evaluate((termo) => {
+      // helpers inline: passar como string exigiria eval, que portais com CSP
+      // restritiva bloqueiam
+      const visivel = (element) => element && element.offsetParent !== null;
+      const emLinha = (element) => Boolean(element.closest('tbody, [role="row"]'));
+      const mascarar = (texto) =>
+        String(texto || '')
+            .replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, 'DD/MM/AAAA')
+            .replace(/R\$\s*[\d.,]+/gi, 'R$ N')
+            .replace(/\d{4,}/g, 'NNNN')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 60);
+      const textoSeguro = (element) => (emLinha(element) ? '' : mascarar(element.innerText));
+      const descrever = (element) => {
+        const partes = [element.tagName.toLowerCase()];
+        if (element.type) partes.push(`type=${element.type}`);
+        if (element.name) partes.push(`name=${element.name}`);
+        if (element.id) partes.push(`id=${element.id}`);
+        const classe = typeof element.className === 'string' ? element.className.trim() : '';
+        if (classe) partes.push(`class="${classe.slice(0, 80)}"`);
+        if (element.placeholder) partes.push(`placeholder="${mascarar(element.placeholder)}"`);
+        const papel = element.getAttribute?.('role');
+        if (papel) partes.push(`role=${papel}`);
+        const rotulo = element.getAttribute?.('aria-label');
+        // dentro de linha o aria-label costuma citar o paciente: so o fato de existir
+        if (rotulo) partes.push(emLinha(element) ? 'tem-aria-label' : `aria-label="${mascarar(rotulo)}"`);
+        return partes.join(' ');
+      };
+
+      const porId = document.getElementById(termo);
+      const candidatos = [...document.querySelectorAll('button, a, div, span, [role="button"], [role="combobox"]')];
+      const porTexto = candidatos
+        .filter((element) => visivel(element) && !emLinha(element) && (element.innerText || '').includes(termo))
+        .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
+
+      const escolhido = porId && visivel(porId) ? porId : porTexto;
+      if (!escolhido) return false;
+      escolhido.setAttribute('data-inspecao', 'abrir');
+      return true;
+  }, alvo);
+
+  if (!marcou) return { clicou: false, motivo: `nao achei "${alvo}" fora das linhas da tabela` };
+
+  await page.locator('[data-inspecao="abrir"]').first().click({ timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  return { clicou: true, alvo };
+}
+
+/** Estrutura do painel que abriu (popover, listbox, calendário). */
+export async function inspecionarAberto(page) {
   return page.evaluate(() => {
-    // definida aqui dentro de proposito: passar a funcao como string exigiria
-    // new Function, que portais com CSP restritiva bloqueiam
+    // helpers inline: passar como string exigiria eval, que portais com CSP
+    // restritiva bloqueiam
+    const visivel = (element) => element && element.offsetParent !== null;
+    const emLinha = (element) => Boolean(element.closest('tbody, [role="row"]'));
+    const mascarar = (texto) =>
+      String(texto || '')
+        .replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, 'DD/MM/AAAA')
+        .replace(/R\$\s*[\d.,]+/gi, 'R$ N')
+        .replace(/\d{4,}/g, 'NNNN')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+    const textoSeguro = (element) => (emLinha(element) ? '' : mascarar(element.innerText));
     const descrever = (element) => {
       const partes = [element.tagName.toLowerCase()];
       if (element.type) partes.push(`type=${element.type}`);
@@ -85,108 +131,201 @@ export async function inspectPage(page) {
       if (element.id) partes.push(`id=${element.id}`);
       const classe = typeof element.className === 'string' ? element.className.trim() : '';
       if (classe) partes.push(`class="${classe.slice(0, 80)}"`);
-      if (element.placeholder) partes.push(`placeholder="${element.placeholder}"`);
-      const rotulo = element.getAttribute?.('aria-label');
-      if (rotulo) partes.push(`aria-label="${rotulo}"`);
+      if (element.placeholder) partes.push(`placeholder="${mascarar(element.placeholder)}"`);
       const papel = element.getAttribute?.('role');
       if (papel) partes.push(`role=${papel}`);
+      const rotulo = element.getAttribute?.('aria-label');
+      // dentro de linha o aria-label costuma citar o paciente: so o fato de existir
+      if (rotulo) partes.push(emLinha(element) ? 'tem-aria-label' : `aria-label="${mascarar(rotulo)}"`);
       return partes.join(' ');
     };
+
+    const paineis = [
+      ...document.querySelectorAll(
+        '[role="dialog"], [role="listbox"], [role="menu"], [role="grid"], [id*="popover-panel"], [id*="listbox-options"], [data-headlessui-state]',
+      ),
+    ].filter((element) => visivel(element) && !emLinha(element));
+
+    const painel = paineis[paineis.length - 1];
+    if (!painel) return { encontrou: false };
+
+    const dentro = (seletor) => [...painel.querySelectorAll(seletor)].filter(visivel);
+
+    return {
+      encontrou: true,
+      painel: descrever(painel),
+      campos: dentro('input, select, textarea').map(descrever),
+      botoes: dentro('button, [role="button"]')
+        .map((element) => ({ descricao: descrever(element), texto: textoSeguro(element) }))
+        .slice(0, 60),
+      opcoes: dentro('[role="option"], li').map(textoSeguro).filter(Boolean).slice(0, 30),
+      temCalendario: dentro('[role="grid"], table, [class*="calend" i], [class*="datepicker" i]').length > 0,
+      temNavegacaoMes: dentro('button, [role="button"]').some((element) =>
+        /anterior|proximo|próximo|prev|next|«|»|‹|›/i.test(
+          `${element.innerText || ''} ${element.getAttribute('aria-label') || ''}`,
+        ),
+      ),
+      textoDoPainel: mascarar(painel.innerText).slice(0, 300),
+    };
+  });
+}
+
+/** Estrutura da coluna "Ações": só atributos, nunca dado do paciente. */
+export async function inspecionarAcoes(page) {
+  return page.evaluate(() => {
+    // helpers inline: passar como string exigiria eval, que portais com CSP
+    // restritiva bloqueiam
     const visivel = (element) => element && element.offsetParent !== null;
-    const texto = (element) => (element.innerText || '').replace(/\s+/g, ' ').trim();
+    const emLinha = (element) => Boolean(element.closest('tbody, [role="row"]'));
+    const mascarar = (texto) =>
+      String(texto || '')
+        .replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, 'DD/MM/AAAA')
+        .replace(/R\$\s*[\d.,]+/gi, 'R$ N')
+        .replace(/\d{4,}/g, 'NNNN')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+    const textoSeguro = (element) => (emLinha(element) ? '' : mascarar(element.innerText));
+    const descrever = (element) => {
+      const partes = [element.tagName.toLowerCase()];
+      if (element.type) partes.push(`type=${element.type}`);
+      if (element.name) partes.push(`name=${element.name}`);
+      if (element.id) partes.push(`id=${element.id}`);
+      const classe = typeof element.className === 'string' ? element.className.trim() : '';
+      if (classe) partes.push(`class="${classe.slice(0, 80)}"`);
+      if (element.placeholder) partes.push(`placeholder="${mascarar(element.placeholder)}"`);
+      const papel = element.getAttribute?.('role');
+      if (papel) partes.push(`role=${papel}`);
+      const rotulo = element.getAttribute?.('aria-label');
+      // dentro de linha o aria-label costuma citar o paciente: so o fato de existir
+      if (rotulo) partes.push(emLinha(element) ? 'tem-aria-label' : `aria-label="${mascarar(rotulo)}"`);
+      return partes.join(' ');
+    };
 
-    const corpo = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    // a primeira <table> do DOM pode ser o calendario de um popover: vale a
+    // que tem mais linhas de corpo, que e a listagem de verdade
+    const tabela = [...document.querySelectorAll('table')].sort(
+      (a, b) => b.querySelectorAll('tbody tr').length - a.querySelectorAll('tbody tr').length,
+    )[0];
+    if (!tabela) return { encontrou: false };
 
-    // --- campos ---
+    const cabecalhos = [...tabela.querySelectorAll('thead th, thead td')].map((celula) =>
+      (celula.innerText || '').trim(),
+    );
+    const indiceAcoes = cabecalhos.findIndex((titulo) => /a[cç][oõ]es/i.test(titulo));
+    const primeiraLinha = tabela.querySelector('tbody tr');
+    if (!primeiraLinha) return { encontrou: false };
+
+    const celula =
+      indiceAcoes >= 0
+        ? primeiraLinha.querySelectorAll('td')[indiceAcoes]
+        : primeiraLinha.querySelector('td:last-child');
+    if (!celula) return { encontrou: false };
+
+    const controles = [...celula.querySelectorAll('button, a, [role="button"]')];
+    return {
+      encontrou: true,
+      colunaAcoes: indiceAcoes,
+      controlesPorLinha: controles.length,
+      controles: controles.map((element) => ({
+        descricao: descrever(element),
+        temAriaLabel: Boolean(element.getAttribute('aria-label')),
+        temTitle: Boolean(element.getAttribute('title')),
+        temHref: element.tagName === 'A' && Boolean(element.getAttribute('href')),
+        icones: [...element.querySelectorAll('svg')].map(
+          (svg) => svg.getAttribute('data-icon') || (typeof svg.className === 'string' ? svg.className : 'svg'),
+        ),
+      })),
+      linhasComLink: [...tabela.querySelectorAll('tbody tr')].filter((linha) => linha.querySelector('a[href]')).length,
+    };
+  });
+}
+
+/**
+ * Estrutura da página: campos, clicáveis, paginação e cabeçalho das tabelas.
+ * Sem conteúdo de linha e sem texto livre da tela.
+ */
+export async function inspectPage(page) {
+  return page.evaluate(() => {
+    // helpers inline: passar como string exigiria eval, que portais com CSP
+    // restritiva bloqueiam
+    const visivel = (element) => element && element.offsetParent !== null;
+    const emLinha = (element) => Boolean(element.closest('tbody, [role="row"]'));
+    const mascarar = (texto) =>
+      String(texto || '')
+        .replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, 'DD/MM/AAAA')
+        .replace(/R\$\s*[\d.,]+/gi, 'R$ N')
+        .replace(/\d{4,}/g, 'NNNN')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+    const textoSeguro = (element) => (emLinha(element) ? '' : mascarar(element.innerText));
+    const descrever = (element) => {
+      const partes = [element.tagName.toLowerCase()];
+      if (element.type) partes.push(`type=${element.type}`);
+      if (element.name) partes.push(`name=${element.name}`);
+      if (element.id) partes.push(`id=${element.id}`);
+      const classe = typeof element.className === 'string' ? element.className.trim() : '';
+      if (classe) partes.push(`class="${classe.slice(0, 80)}"`);
+      if (element.placeholder) partes.push(`placeholder="${mascarar(element.placeholder)}"`);
+      const papel = element.getAttribute?.('role');
+      if (papel) partes.push(`role=${papel}`);
+      const rotulo = element.getAttribute?.('aria-label');
+      // dentro de linha o aria-label costuma citar o paciente: so o fato de existir
+      if (rotulo) partes.push(emLinha(element) ? 'tem-aria-label' : `aria-label="${mascarar(rotulo)}"`);
+      return partes.join(' ');
+    };
+
     const campos = [...document.querySelectorAll('input, select, textarea')]
-      .filter((element) => element.type !== 'hidden')
+      .filter((element) => element.type !== 'hidden' && !emLinha(element))
       .map((element) => {
-        const base = descrever(element);
         const extras = [];
         if (element.tagName === 'SELECT') {
-          extras.push('opcoes=[' + [...element.options].map((o) => o.text.trim()).join(' | ') + ']');
-        }
-        // valor só quando não for senha, e truncado
-        if (element.type !== 'password' && element.value) {
-          extras.push('valor="' + String(element.value).slice(0, 40) + '"');
+          extras.push('opcoes=[' + [...element.options].map((o) => mascarar(o.text)).join(' | ') + ']');
+          if (element.value) extras.push('valor="' + mascarar(element.value) + '"');
         }
         if (!visivel(element)) extras.push('OCULTO');
-        return [base, ...extras].join(' ');
+        return [descrever(element), ...extras].join(' ');
       });
 
-    // --- botões e elementos clicáveis com texto curto ---
-    const clicaveis = [...document.querySelectorAll('button, a, [role="button"], [role="tab"], [role="option"]')]
-      .filter(visivel)
-      .map((element) => ({ descricao: descrever(element), texto: texto(element).slice(0, 40) }))
-      .filter((item) => item.texto.length > 0 || item.descricao.includes('aria-label'))
-      .slice(0, 120);
+    const clicaveis = [...document.querySelectorAll('button, a, [role="button"], [role="tab"]')]
+      .filter((element) => visivel(element) && !emLinha(element))
+      .map((element) => ({ descricao: descrever(element), texto: textoSeguro(element) }))
+      .slice(0, 80);
 
-    // --- candidatos a paginação ---
-    const numeros = [...document.querySelectorAll('button, a, li, span, div')]
-      .filter((element) => visivel(element) && element.children.length === 0)
-      .filter((element) => /^\d{1,3}$/.test(texto(element)))
-      .map((element) => ({
-        numero: texto(element),
-        descricao: descrever(element),
-        pai: element.parentElement ? descrever(element.parentElement) : '',
-      }))
-      .slice(0, 30);
+    const desabilitado = (element) =>
+      element.disabled === true ||
+      element.getAttribute('aria-disabled') === 'true' ||
+      (typeof element.className === 'string' ? element.className : '').split(/\s+/).includes('disabled');
 
-    const setas = [...document.querySelectorAll('button, a, [role="button"]')]
-      .filter(visivel)
+    const paginacao = [...document.querySelectorAll('button, a, [role="button"]')]
+      .filter((element) => visivel(element) && !emLinha(element))
       .filter((element) => {
-        const alvo = (
-          texto(element) +
-          ' ' +
-          (element.getAttribute('aria-label') || '') +
-          ' ' +
-          (element.getAttribute('title') || '') +
-          ' ' +
-          (typeof element.className === 'string' ? element.className : '')
-        ).toLowerCase();
-        return /next|prox|próx|seguinte|forward|chevron|arrow|»|>/.test(alvo);
+        const alvo = `${element.innerText || ''} ${element.getAttribute('aria-label') || ''} ${
+          typeof element.className === 'string' ? element.className : ''
+        }`.toLowerCase();
+        return (
+          /next|prev|prox|próx|anterior|seguinte|pagina|page/.test(alvo) ||
+          /^\d{1,3}$/.test((element.innerText || '').trim())
+        );
       })
       .map((element) => ({
         descricao: descrever(element),
-        texto: texto(element).slice(0, 20),
-        desabilitado:
-          element.disabled === true ||
-          element.getAttribute('aria-disabled') === 'true' ||
-          (typeof element.className === 'string' ? element.className : '').split(/\s+/).includes('disabled'),
+        texto: textoSeguro(element),
+        desabilitado: desabilitado(element),
       }))
-      .slice(0, 20);
+      .slice(0, 25);
 
-    // --- textos com cara de data / intervalo ---
-    const reIntervalo = /(\d{1,2}\/\d{1,2}\/\d{2,4})\s*[-–—a]\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/;
-    const datas = [...document.querySelectorAll('*')]
-      .filter((element) => visivel(element) && element.children.length === 0)
-      .filter((element) => reIntervalo.test(texto(element)) || /\d{2}\/\d{2}\/\d{4}/.test(texto(element)))
-      .map((element) => ({ descricao: descrever(element), texto: texto(element).slice(0, 60) }))
-      .slice(0, 15);
-
-    // --- tabelas ---
     const tabelas = [...document.querySelectorAll('table')].map((tabela) => ({
       descricao: descrever(tabela),
-      colunas: [...tabela.querySelectorAll('thead th, thead td')].map((celula) => texto(celula)),
+      colunas: [...tabela.querySelectorAll('thead th, thead td')].map((celula) => (celula.innerText || '').trim()),
       linhas: tabela.querySelectorAll('tbody tr').length,
-      // primeira coluna das 3 primeiras linhas: costuma ser o identificador
-      amostraPrimeiraColuna: [...tabela.querySelectorAll('tbody tr')]
-        .slice(0, 3)
-        .map((linha) => texto(linha.querySelector('td'))),
-      linhasComLink: [...tabela.querySelectorAll('tbody tr')].filter((linha) => linha.querySelector('a[href]')).length,
-      exemploLink: (() => {
-        const link = tabela.querySelector('tbody tr a[href]');
-        return link ? link.getAttribute('href') : '';
-      })(),
+      colunasPorLinha: tabela.querySelector('tbody tr')?.querySelectorAll('td').length || 0,
     }));
 
-    // --- grids que não são <table> ---
-    const grids = [...document.querySelectorAll('[role="grid"], [role="table"], [class*="atagrid" i], [class*="table" i]')]
-      .filter(visivel)
-      .map(descrever)
-      .slice(0, 10);
-
-    const contagem = corpo.match(/Mostrando[^.]{0,60}/i);
+    // a frase de contagem preserva os números: são agregados, não dado pessoal
+    const corpo = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    const contagem = corpo.match(/Mostrando\s+\d+\s+a\s+\d+\s+de\s+\d+\s+resultados?/i);
 
     return {
       url: location.href,
@@ -194,11 +333,8 @@ export async function inspectPage(page) {
       textoContagem: contagem ? contagem[0] : '',
       campos,
       clicaveis,
-      paginacao: { numeros, setas },
-      datas,
+      paginacao,
       tabelas,
-      grids,
-      trechoDoTexto: corpo.slice(0, 600),
     };
   });
 }

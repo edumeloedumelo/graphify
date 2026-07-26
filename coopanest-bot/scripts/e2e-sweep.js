@@ -257,10 +257,76 @@ await check('com 50 por pagina as 36 guias cabem numa pagina so', async () => {
   assert.equal(linhas, 36, `mostrou ${linhas} linha(s)`);
 });
 
-// --- paginacao ---
+// --- reconciliacao: total informado x coletado ---
 const { percorrerPaginas } = await import('../src/sweep.js');
 const comum = { rotuloResultados: 'Mostrando', maxPaginas: 40, esperaMs: 120, log: () => {} };
 
+await page.goto(`http://${'127.0.0.1'}:${porta}/`, { waitUntil: 'domcontentloaded' });
+const quatroPaginas = await percorrerPaginas(page, { ...comum, label: '4 paginas' });
+
+await check('36 registros em 4 paginas: 10+10+10+6, todas visitadas', () => {
+  assert.equal(quatroPaginas.totalInformado, 36);
+  assert.equal(quatroPaginas.porPagina, 10);
+  assert.equal(quatroPaginas.paginasVisitadas, 4, `visitou ${quatroPaginas.paginasVisitadas}`);
+  const porPagina = quatroPaginas.paginas.map((item) => item.casos.length);
+  assert.deepEqual(porPagina, [10, 10, 10, 6]);
+  assert.equal(quatroPaginas.coletadas, 36);
+  assert.equal(quatroPaginas.completou, true, `erros: ${quatroPaginas.erros.join('; ')}`);
+});
+
+// o portal informa 36 mas some com uma linha: coletado != informado tem que falhar
+await page.goto(`http://${'127.0.0.1'}:${porta}/`, { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => {
+  window.__sumirUmaLinha = true;
+  document.querySelector('#corpo tr:last-child')?.remove();
+  const original = document.getElementById('corpo').innerHTML;
+  const observador = new MutationObserver(() => {
+    const linhas = document.querySelectorAll('#corpo tr');
+    if (linhas.length > 1 && window.__sumirUmaLinha) linhas[linhas.length - 1].remove();
+  });
+  observador.observe(document.getElementById('corpo'), { childList: true });
+  return original;
+});
+const comPerda = await percorrerPaginas(page, { ...comum, label: 'com perda' });
+
+await check('perder uma linha impede a varredura de ser completa', () => {
+  assert.equal(comPerda.completou, false);
+  assert.ok(comPerda.coletadas < comPerda.totalInformado, 'deveria ter coletado menos que o informado');
+  assert.ok(
+    comPerda.erros.some((erro) => /informou 36 guias e foram coletadas/.test(erro)),
+    `erros: ${comPerda.erros.join('; ')}`,
+  );
+});
+
+// paginacao travada: assinatura repetida
+await page.goto(`http://${'127.0.0.1'}:${porta}/`, { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => {
+  window.__travado = true;
+  for (const botao of document.querySelectorAll('.pg')) botao.onclick = null;
+});
+const assinaturaRepetida = await percorrerPaginas(page, { ...comum, label: 'assinatura repetida' });
+
+await check('assinatura repetida ou clique sem efeito gera erro', () => {
+  assert.equal(assinaturaRepetida.completou, false);
+  assert.ok(assinaturaRepetida.erros.length > 0, 'deveria registrar erro');
+});
+
+// mais resultados do que cabem na pagina, sem paginacao alcancavel
+await page.goto(`http://${'127.0.0.1'}:${porta}/`, { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => {
+  document.getElementById('paginacao').innerHTML = '';
+});
+const semPaginacao = await percorrerPaginas(page, { ...comum, label: 'sem paginacao' });
+
+await check('total maior que a pagina sem paginacao e falha, nao sucesso', () => {
+  assert.equal(semPaginacao.completou, false, 'nao pode se declarar completa lendo so a primeira pagina');
+  assert.ok(
+    semPaginacao.erros.some((erro) => /so uma pagina foi lida|foram coletadas/.test(erro)),
+    `erros: ${semPaginacao.erros.join('; ')}`,
+  );
+});
+
+// --- paginacao ---
 await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
 const percurso = await percorrerPaginas(page, { ...comum, label: 'percurso' });
 

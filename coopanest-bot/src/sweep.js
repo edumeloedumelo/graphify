@@ -245,12 +245,22 @@ export async function escolherOpcao(page, texto) {
  */
 async function assinaturaLinhas(page) {
   return page.evaluate(() => {
-    const linhas = [...document.querySelectorAll('table tbody tr, [role="row"]')].slice(0, 5);
-    const chaves = linhas.map((linha) => {
-      const celulas = [...linha.querySelectorAll('td, [role="cell"]')].slice(0, 3);
-      return celulas.map((celula) => (celula.innerText || '').replace(/\s+/g, ' ').trim()).join('|');
-    });
-    return { assinatura: chaves.join(' /// '), linhas: document.querySelectorAll('table tbody tr, [role="row"]').length };
+    const linhas = [...document.querySelectorAll('table tbody tr')];
+    // identificador da primeira coluna (CPSA no portal): e o que prova que a
+    // pagina mudou, e o que permite detectar a mesma guia em duas paginas
+    const ids = linhas.map((linha) => ((linha.querySelector('td')?.innerText || '').match(/\d{4,}/) || [''])[0]).filter(Boolean);
+    return { assinatura: ids.join(','), ids, linhas: linhas.length };
+  });
+}
+
+/** Tamanho de página escolhido no select numérico da listagem. */
+async function tamanhoDaPagina(page) {
+  return page.evaluate(() => {
+    for (const select of document.querySelectorAll('select')) {
+      const numericas = [...select.options].map((opcao) => parseInt(opcao.text, 10)).filter(Number.isFinite);
+      if (numericas.length === select.options.length && numericas.length > 1) return parseInt(select.value, 10) || 0;
+    }
+    return 0;
   });
 }
 
@@ -273,11 +283,12 @@ async function proximoControle(page) {
       return Boolean(element.closest('[disabled], [aria-disabled="true"]'));
     };
 
+    // o portal usa exatamente button[aria-label="Next"] — vem primeiro na lista
     const candidatos = [
       ...document.querySelectorAll(
-        'a[rel="next"], .pagination a.next, .pagination li.next a, li.paginate_button.next, ' +
-          '.paginate_button.next, [class*="next" i], [aria-label*="rox" i], [aria-label*="next" i], ' +
-          '[title*="rox" i], [title*="next" i], button, a',
+        'button[aria-label="Next"], a[rel="next"], .pagination a.next, .pagination li.next a, ' +
+          'li.paginate_button.next, .paginate_button.next, [class*="next" i], [aria-label*="rox" i], ' +
+          '[aria-label*="next" i], [title*="rox" i], [title*="next" i], button, a',
       ),
     ];
 
@@ -312,8 +323,11 @@ async function proximoControle(page) {
 export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esperaMs, label, onPage, log }) {
   const paginas = [];
   const assinaturas = new Set();
+  const cpsaPorPagina = new Map();
+  const erros = [];
   let completou = false;
   let motivoParada = '';
+  let ultimaPaginaAlcancada = false;
 
   const contagemTexto = await page.evaluate((marcador) => {
     const corpo = (document.body?.innerText || '').replace(/\s+/g, ' ');
@@ -322,48 +336,54 @@ export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esp
   }, rotuloResultados);
 
   const contagem = lerContagem(contagemTexto);
-  let esperadas = contagem ? contagem.paginas : 0;
-  if (contagem && !contagem.confiavel) esperadas = Math.max(await maiorBotaoPagina(page), 1);
-  const limite = Math.min(esperadas || maxPaginas, maxPaginas);
+  const totalInformado = contagem?.total ?? 0;
+  const porPagina = (await tamanhoDaPagina(page)) || contagem?.porPagina || 0;
+  const esperadas = totalInformado && porPagina ? Math.ceil(totalInformado / porPagina) : contagem?.paginas || 1;
+  const limite = Math.min(esperadas || 1, maxPaginas);
 
-  if (contagem) log(`${label}: ${contagem.total} resultado(s), ~${esperadas} pagina(s)`);
+  if (contagem) log(`${label}: ${totalInformado} resultado(s), ${porPagina}/pagina, ~${esperadas} pagina(s)`);
 
   for (let numero = 1; numero <= limite; numero += 1) {
-    const { assinatura, linhas } = await assinaturaLinhas(page);
+    const { assinatura, ids, linhas } = await assinaturaLinhas(page);
 
     if (assinaturas.has(assinatura)) {
-      motivoParada = `pagina ${numero} repetiu o conteudo da anterior`;
-      log(`${label}: ${motivoParada}`);
+      motivoParada = `pagina ${numero} repetiu a assinatura da anterior — a paginacao nao avancou`;
+      erros.push(motivoParada);
       break;
     }
     assinaturas.add(assinatura);
 
+    // a mesma guia em duas paginas significa listagem instavel: os dados
+    // coletados nao sao confiaveis
+    for (const id of ids) {
+      const anterior = cpsaPorPagina.get(id);
+      if (anterior !== undefined && anterior !== numero) {
+        erros.push(`guia ${id} apareceu nas paginas ${anterior} e ${numero}`);
+      }
+      cpsaPorPagina.set(id, numero);
+    }
+
     const conteudo = await extractPageContent(page);
-    // lê a tabela direto do DOM: não gasta IA e não perde linha
     const { casos } = await casosDaPagina(page);
     const titulo = `${label} — pagina ${numero}`;
     paginas.push({ url: titulo, content: conteudo, casos });
     onPage?.(titulo, conteudo);
-    log(`${label}: pagina ${numero}/${limite} — ${linhas} linha(s), ${casos.length} caso(s) lido(s) da tabela`);
+    log(`${label}: pagina ${numero}/${limite} — ${linhas} linha(s), ${casos.length} caso(s)`);
 
-    if (numero === limite) {
-      completou = true;
-      break;
-    }
-
-    // 1) botão "próxima"; 2) número da próxima página
     const proxima = await proximoControle(page);
-    let clicou = false;
-
-    if (proxima === 'ultima') {
-      completou = true;
-      motivoParada = 'botao de proxima pagina desabilitado';
+    if (proxima === 'ultima' || (!proxima && numero >= limite)) {
+      ultimaPaginaAlcancada = true;
       break;
     }
-    if (proxima) {
+    if (numero === limite) {
+      ultimaPaginaAlcancada = true;
+      break;
+    }
+
+    let clicou = false;
+    if (proxima && proxima !== 'ultima') {
       await proxima.click({ timeout: 10_000 }).then(() => { clicou = true; }).catch(() => {});
     }
-
     if (!clicou) {
       const marcou = await marcar(page, 'pagina', {
         tipo: 'folhaExata',
@@ -379,17 +399,43 @@ export async function percorrerPaginas(page, { rotuloResultados, maxPaginas, esp
           .catch(() => {});
       }
     }
-
     if (!clicou) {
-      motivoParada = `nao achei como ir para a pagina ${numero + 1}`;
-      log(`${label}: ${motivoParada}`);
+      motivoParada = `nao achei como ir para a pagina ${numero + 1} de ${limite}`;
+      erros.push(motivoParada);
       break;
     }
 
     await page.waitForTimeout(esperaMs);
   }
 
-  return { paginas, completou, paginasVisitadas: paginas.length, esperadas, motivoParada };
+  const coletadas = cpsaPorPagina.size;
+  const linhasLidas = paginas.reduce((soma, item) => soma + (item.casos?.length || 0), 0);
+
+  // paginacao obrigatoria: mais resultados que cabem numa pagina e nenhuma
+  // segunda pagina visitada e falha, nao sucesso silencioso
+  if (totalInformado > porPagina && porPagina > 0 && paginas.length <= 1) {
+    erros.push(`o portal informou ${totalInformado} resultados com ${porPagina} por pagina, mas so uma pagina foi lida`);
+  }
+  if (totalInformado && coletadas !== totalInformado) {
+    erros.push(`o portal informou ${totalInformado} guias e foram coletadas ${coletadas}`);
+  }
+
+  completou = ultimaPaginaAlcancada && erros.length === 0;
+  if (!completou && !motivoParada) motivoParada = erros[0] || 'varredura incompleta';
+
+  return {
+    paginas,
+    completou,
+    paginasVisitadas: paginas.length,
+    esperadas,
+    porPagina,
+    totalInformado,
+    coletadas,
+    linhasLidas,
+    ultimaPaginaAlcancada,
+    erros,
+    motivoParada,
+  };
 }
 
 /**
@@ -438,6 +484,9 @@ export async function sweepListing(page, { cfg, log = () => {}, onPage } = {}) {
 
   const incompletos = percursos.filter((item) => !item.completou);
   for (const item of incompletos) avisos.push(`${item.label}: varredura incompleta — ${item.motivoParada}`);
+  for (const item of percursos) for (const erro of item.erros || []) avisos.push(`${item.label}: ${erro}`);
+
+  const semFiltroPercurso = percursos[0] || {};
 
   return {
     paginas,
@@ -450,6 +499,11 @@ export async function sweepListing(page, { cfg, log = () => {}, onPage } = {}) {
       percursos,
       completou: incompletos.length === 0,
       filtrosVarridos: opcoes,
+      portalTotalReported: semFiltroPercurso.totalInformado || 0,
+      portalRowsCollected: semFiltroPercurso.coletadas || 0,
+      pageSize: semFiltroPercurso.porPagina || 0,
+      lastPageReached: Boolean(semFiltroPercurso.ultimaPaginaAlcancada),
+      paginationDetected: (semFiltroPercurso.paginasVisitadas || 0) > 1,
     },
   };
 }

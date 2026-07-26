@@ -1,7 +1,7 @@
 import { getConfig, doctorByName } from './config.js';
 import { scrapeCases } from './coopanest.js';
 import { loadSnapshot, saveSnapshot } from './snapshot.js';
-import { diffSnapshot, describeChange, caseKey } from './diff.js';
+import { diffSnapshot, describeChange, caseKey, cpsasDuplicadas, temIdentificadorDoPortal } from './diff.js';
 import { computeSalary } from './salary.js';
 import { nowStamp } from './format.js';
 import { setValue, getValue } from './state.js';
@@ -35,6 +35,23 @@ function caseHeadline(item) {
 export async function applyCases(rawCases = []) {
   const cfg = getConfig();
   const incoming = rawCases.map(attachDoctor);
+
+  // integridade: a mesma CPSA duas vezes na leitura significa que um caso
+  // sobrescreveria o outro na planilha. Melhor parar do que gravar errado.
+  const duplicadas = cpsasDuplicadas(incoming);
+  if (duplicadas.length) {
+    return {
+      added: [],
+      updated: [],
+      unchanged: [],
+      merged: loadSnapshot(),
+      warnings: [`integridade: CPSA repetida na leitura (${duplicadas.slice(0, 5).join(', ')})`],
+      duplicateCpsas: duplicadas,
+      sheet: null,
+      salary: null,
+      resumoPlanilha: null,
+    };
+  }
   const previous = loadSnapshot();
   const { added, updated, unchanged, merged } = diffSnapshot(previous, incoming);
 
@@ -72,7 +89,18 @@ export async function applyCases(rawCases = []) {
 
   saveSnapshot(merged);
 
-  return { added, updated, unchanged, merged, warnings, sheet, salary, resumoPlanilha };
+  return {
+    added,
+    updated,
+    unchanged,
+    merged,
+    warnings,
+    sheet,
+    salary,
+    resumoPlanilha,
+    duplicateCpsas: [],
+    semIdentificador: incoming.filter((item) => !temIdentificadorDoPortal(item)).length,
+  };
 }
 
 /** Resumo em texto do que mudou — vai para o log e para GET /status. */
@@ -156,20 +184,56 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
       };
     }
 
-    report.uniqueCasesFound = Object.keys(applied.merged).length;
+    // contagens separadas: o que o portal disse, o que foi coletado nesta
+    // rodada e o que ja existia acumulado sao numeros diferentes
+    report.portalTotalReported = sweep?.portalTotalReported ?? 0;
+    report.portalRowsCollected = sweep?.portalRowsCollected ?? 0;
+    report.portalUniqueCpsas = new Set(
+      scraped.cases.filter(temIdentificadorDoPortal).map((item) => String(item.guia).replace(/\D/g, '')),
+    ).size;
+    report.pageSize = sweep?.pageSize ?? 0;
+    report.lastPageReached = Boolean(sweep?.lastPageReached);
+    report.currentRunCasesFound = scraped.cases.length;
+    report.databaseCasesTracked = Object.keys(applied.merged).length;
+    report.newCases = report.added;
+    report.updatedCases = report.updated;
+    report.unchangedCases = report.unchanged;
+    report.duplicateCpsas = applied.duplicateCpsas?.length || 0;
+    report.ignoredCases = applied.semIdentificador || 0;
+    report.ignoredReasons = report.ignoredCases ? ['caso sem CPSA — chave composta usada como fallback'] : [];
+    report.sheetRows = applied.resumoPlanilha?.linhasCirurgias ?? null;
 
     // completa so quando a leitura foi comprovadamente integral: login ok,
     // periodo aplicado, toda paginacao percorrida e nenhum erro no caminho
-    const varreduraIntegral = Boolean(sweep?.completou);
-    report.syncComplete =
-      varreduraIntegral && report.periodApplied && report.warnings.length === 0 && !report.error;
-    if (!report.syncComplete) {
-      report.syncIncompleteReason = !report.periodApplied
-        ? 'filtro de periodo nao aplicado — o portal listou apenas o intervalo padrao'
-        : !varreduraIntegral
-          ? 'a varredura nao chegou comprovadamente a ultima pagina'
-          : 'houve avisos durante a leitura';
-    }
+    // syncComplete e uma afirmacao forte: so vale quando cada etapa se provou
+    const exigencias = [
+      [report.periodApplied, 'filtro de periodo nao aplicado — o portal listou so o intervalo padrao'],
+      [
+        !report.periodRequested || report.periodInPortal === report.periodRequested,
+        `o periodo no portal ("${report.periodInPortal}") nao confere com o pedido ("${report.periodRequested}")`,
+      ],
+      [
+        !(report.portalTotalReported > report.pageSize && report.pageSize > 0) || report.paginationDetected,
+        'ha mais resultados que cabem numa pagina e a paginacao nao foi percorrida',
+      ],
+      [report.lastPageReached, 'a varredura nao chegou comprovadamente a ultima pagina'],
+      [
+        !report.portalTotalReported || report.portalRowsCollected === report.portalTotalReported,
+        `o portal informou ${report.portalTotalReported} guias e foram coletadas ${report.portalRowsCollected}`,
+      ],
+      [
+        !report.portalTotalReported || report.portalUniqueCpsas === report.portalTotalReported,
+        `${report.portalUniqueCpsas} CPSA distintas para ${report.portalTotalReported} guias informadas`,
+      ],
+      [report.duplicateCpsas === 0, 'houve CPSA duplicada na leitura'],
+      [report.warnings.length === 0, 'houve avisos durante a leitura'],
+      [Boolean(applied.resumoPlanilha), 'a planilha nao foi atualizada'],
+      [!report.error, 'a varredura terminou em erro'],
+    ];
+
+    const pendencia = exigencias.find(([atendida]) => !atendida);
+    report.syncComplete = !pendencia;
+    if (pendencia) [, report.syncIncompleteReason] = pendencia;
 
     report.durationSeconds = Math.round((Date.now() - startedAt) / 1000);
     setValue('lastSync', {
@@ -192,9 +256,22 @@ export async function runSync({ trigger = 'manual', force = false } = {}) {
       periodRequested: report.periodRequested,
       periodInPortal: report.periodInPortal,
       paginationDetected: report.paginationDetected,
-      uniqueCasesFound: report.uniqueCasesFound,
       urlsVisitadas: report.urlsVisitadas,
       percursos: report.percursos,
+      portalTotalReported: report.portalTotalReported,
+      portalRowsCollected: report.portalRowsCollected,
+      portalUniqueCpsas: report.portalUniqueCpsas,
+      pageSize: report.pageSize,
+      lastPageReached: report.lastPageReached,
+      currentRunCasesFound: report.currentRunCasesFound,
+      databaseCasesTracked: report.databaseCasesTracked,
+      sheetRows: report.sheetRows,
+      newCases: report.newCases,
+      updatedCases: report.updatedCases,
+      unchangedCases: report.unchangedCases,
+      duplicateCpsas: report.duplicateCpsas,
+      ignoredCases: report.ignoredCases,
+      ignoredReasons: report.ignoredReasons,
     });
     setValue('lastSyncAttempt', timestamp);
     if (report.syncComplete) setValue('lastSuccessfulFullSync', timestamp);

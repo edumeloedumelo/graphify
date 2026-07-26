@@ -11,6 +11,26 @@ import { getConfig } from './config.js';
  * de valor. A composição paciente+data+procedimento fica como reserva, para
  * casos vindos de páginas sem esse número.
  */
+/** O caso tem identificador do portal? Chave composta é só fallback legado. */
+export function temIdentificadorDoPortal(item) {
+  return String(item?.guia || '').replace(/\D/g, '').length >= 4;
+}
+
+/**
+ * Guias que aparecem mais de uma vez na mesma leitura.
+ * Duas linhas com a mesma CPSA e conteudo diferente significam leitura
+ * inconsistente — gravar isso sobrescreveria um caso com o outro.
+ */
+export function cpsasDuplicadas(cases = []) {
+  const porGuia = new Map();
+  for (const item of cases) {
+    if (!temIdentificadorDoPortal(item)) continue;
+    const guia = String(item.guia).replace(/\D/g, '');
+    porGuia.set(guia, (porGuia.get(guia) || 0) + 1);
+  }
+  return [...porGuia.entries()].filter(([, quantas]) => quantas > 1).map(([guia]) => guia);
+}
+
 export function caseKey(item) {
   const identificador = String(item.guia || '').replace(/\D/g, '');
   if (identificador.length >= 4) return `g${identificador}`;

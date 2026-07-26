@@ -4,7 +4,8 @@ import path from 'node:path';
 import { getConfig, STATE_DIR } from './config.js';
 import { extractCases, dedupeCases, normalizeCase } from './extractor.js';
 import { crawlSite, looksLikeData, normalizeUrl } from './crawler.js';
-import { inspectPage, abrirElemento, formaDoJson } from './inspector.js';
+import { inspectPage, abrirElemento, inspecionarAberto, inspecionarAcoes, formaDoJson } from './inspector.js';
+import { motivoRecusarUrl } from './inspectorguard.js';
 
 const SESSION_FILE = path.join(STATE_DIR, 'coopanest-session.json');
 
@@ -489,14 +490,27 @@ export async function inspectPortal(urls = [], { abrir = '' } = {}) {
     const alvos = urls.length ? urls : seedUrls(cfg, page);
     for (const url of alvos) {
       try {
+        const recusa = motivoRecusarUrl(url);
+        if (recusa) {
+          relatorios.push({ url, erro: recusa });
+          continue;
+        }
         if (normalizeUrl(page.url()) !== normalizeUrl(url)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
         }
+        // redirect para outro host: aborta antes de fotografar qualquer coisa
+        const depoisDoRedirect = motivoRecusarUrl(page.url());
+        if (depoisDoRedirect) {
+          relatorios.push({ url, erro: `redirecionou para host nao autorizado (${depoisDoRedirect})` });
+          continue;
+        }
         await page.waitForLoadState('networkidle', { timeout }).catch(() => {});
         await page.waitForTimeout(cfg.crawl?.waitAfterLoadMs ?? 1500);
+        const acoes = await inspecionarAcoes(page);
         const aberto = abrir ? await abrirElemento(page, abrir) : null;
+        const painel = aberto?.clicou ? await inspecionarAberto(page) : null;
         const relatorio = await inspectPage(page);
-        relatorios.push(aberto ? { ...relatorio, aberto } : relatorio);
+        relatorios.push({ ...relatorio, acoes, ...(aberto ? { aberto, painel } : {}) });
       } catch (err) {
         relatorios.push({ url, erro: err.message });
       }

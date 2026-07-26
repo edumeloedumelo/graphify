@@ -7,6 +7,7 @@ import { loadSnapshot, countCases } from './snapshot.js';
 import { computeSalary } from './salary.js';
 import { getConfig } from './config.js';
 import * as sheets from './sheets.js';
+import { inspetorHabilitado, autorizado, motivoRecusarUrl } from './inspectorguard.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -120,17 +121,22 @@ ${sheets.sheetUrl() ? `<a class="sec" href="${sheets.sheetUrl()}">Abrir a planil
 </body></html>`;
 }
 
-// estrutura real do DOM do portal — para escrever seletores sem chutar
+// estrutura do DOM do portal — devolve forma, nunca conteudo de linha
 app.get('/inspecionar', async (req, res) => {
-  const secret = process.env.SYNC_SECRET;
-  if (secret && (req.get('x-sync-secret') || req.query.secret) !== secret) {
-    return res.status(401).json({ error: 'segredo invalido' });
-  }
+  if (!inspetorHabilitado()) return res.status(404).json({ error: 'inspetor desativado (INSPECTOR_ENABLED=false)' });
+
+  const permissao = autorizado(req);
+  if (!permissao.ok) return res.status(permissao.status).json({ error: permissao.motivo });
 
   const urls = String(req.query.url || '')
     .split(',')
     .map((url) => url.trim())
     .filter(Boolean);
+
+  for (const url of urls) {
+    const recusa = motivoRecusarUrl(url);
+    if (recusa) return res.status(403).json({ error: `${url}: ${recusa}` });
+  }
 
   try {
     const { inspectPortal } = await import('./coopanest.js');
