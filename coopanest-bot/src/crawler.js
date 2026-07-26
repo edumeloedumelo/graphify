@@ -93,11 +93,13 @@ async function findNextControl(page, selectors = []) {
       if (!(await locator.isVisible())) continue;
       if (!(await locator.isEnabled())) continue;
       const disabled = await locator.evaluate((element) => {
-        const classes = element.className || '';
+        // "disabled:opacity-75" do Tailwind nao e estado desabilitado
+        const classes = (typeof element.className === 'string' ? element.className : '').split(/\s+/);
         return (
+          element.disabled === true ||
           element.getAttribute('aria-disabled') === 'true' ||
-          /\bdisabled\b/i.test(typeof classes === 'string' ? classes : '') ||
-          element.closest('.disabled') !== null
+          classes.includes('disabled') ||
+          element.closest('[disabled], [aria-disabled="true"]') !== null
         );
       });
       if (disabled) continue;

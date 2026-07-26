@@ -19,7 +19,7 @@ const PAGINA = `<!doctype html><html><body>
 <input id="periodo" type="text" value="25/01/2025 - 25/07/2026"/>
 <div id="filtro">Selecione o item <i>&#9662;</i></div>
 <ul id="opcoes" style="display:none"></ul>
-<div>Guias por página: <div id="porPagina">10</div></div>
+<div>Guias por página: <select id="porPagina"><option>5</option><option selected>10</option><option>20</option><option>30</option><option>50</option></select></div>
 <table><thead><tr><th>CPSA</th><th>Status</th><th>Paciente</th><th>Data Cirurgia</th><th>Valor Faturado</th></tr></thead>
 <tbody id="corpo"></tbody></table>
 <div id="rodape"></div>
@@ -43,7 +43,7 @@ for (const status of STATUS) {
 }
 let filtro = '';
 let pagina = 1;
-const porPagina = 10;
+let porPagina = 10;
 
 function render() {
   const visiveis = filtro ? linhas.filter((l) => l.status === filtro) : linhas;
@@ -61,8 +61,11 @@ function render() {
     Math.min(inicio + porPagina, total) + '</b> <span>de</span> <b>' + total + '</b> <span>resultados</span>';
   const ultima = pagina >= paginas;
   document.getElementById('paginacao').innerHTML =
-    Array.from({ length: paginas }, (_, i) => '<button class="pg">' + (i + 1) + '</button>').join('') +
-    '<button class="next"' + (ultima ? ' disabled' : '') + ' aria-label="Próxima página">›</button>';
+    Array.from({ length: paginas }, (_, i) =>
+      '<button class="pg focus:outline-none disabled:cursor-not-allowed disabled:opacity-75">' + (i + 1) + '</button>'
+    ).join('') +
+    '<button class="next focus:outline-none disabled:cursor-not-allowed disabled:opacity-75"' +
+    (ultima ? ' disabled' : '') + ' aria-label="Next">›</button>';
   for (const botao of document.querySelectorAll('.pg')) {
     botao.onclick = () => { pagina = Number(botao.innerText); render(); };
   }
@@ -89,6 +92,11 @@ document.getElementById('filtro').onclick = () => {
     };
   }
 };
+document.getElementById('porPagina').onchange = (evento) => {
+  porPagina = Number(evento.target.value);
+  pagina = 1;
+  render();
+};
 render();
 </script></body></html>`;
 
@@ -106,9 +114,12 @@ const { sweepListing, periodoDesejado, lerContagem, pareceListagem } = await imp
 const { getConfig } = await import('../src/config.js');
 
 const failures = [];
-function check(nome, fn) {
+// async de proposito: uma asserção com await dentro de um check síncrono
+// virava promessa solta — o teste imprimia "ok" e a falha aparecia depois,
+// fora do relatório
+async function check(nome, fn) {
   try {
-    fn();
+    await fn();
     console.log(`  ok  ${nome}`);
   } catch (err) {
     failures.push(nome);
@@ -118,7 +129,7 @@ function check(nome, fn) {
 
 console.log('\nvarredura da listagem de guias\n');
 
-check('lerContagem entende o rodape do portal', () => {
+await check('lerContagem entende o rodape do portal', () => {
   // no portal o texto vem quebrado entre <span> e <b>; a leitura e feita no
   // texto corrido da pagina justamente por isso
   assert.deepEqual(lerContagem('Mostrando 1 a 10 de 36 resultados'), {
@@ -138,7 +149,7 @@ check('lerContagem entende o rodape do portal', () => {
   assert.equal(lerContagem('sem numeros'), null);
 });
 
-check('periodoDesejado cobre os ultimos 2 anos', () => {
+await check('periodoDesejado cobre os ultimos 2 anos', () => {
   const texto = periodoDesejado(2, new Date(2026, 6, 25));
   assert.equal(texto, '25/07/2024 - 25/07/2026');
 });
@@ -153,7 +164,7 @@ await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' })
 
 const cfg = { ...getConfig(), sweep: { ...getConfig().sweep, esperaMs: 150 } };
 
-check('reconhece a tela como listagem', async () => {
+await check('reconhece a tela como listagem', async () => {
   assert.ok(await pareceListagem(page, cfg));
 });
 
@@ -161,34 +172,39 @@ const { paginas, avisos } = await sweepListing(page, { cfg, log: () => {} });
 const texto = paginas.map((p) => p.content).join('\n');
 const rotulos = paginas.map((p) => p.url);
 
-check('percorreu as 4 paginas da listagem sem filtro', () => {
+await check('com 50 por pagina, a listagem inteira sai numa leitura', () => {
+  // aumentar itens por pagina e a defesa mais forte contra paginacao quebrada:
+  // menos cliques, menos chance de travar no meio
   const semFiltro = rotulos.filter((r) => r.startsWith('sem filtro'));
-  assert.equal(semFiltro.length, 4, `esperava 4 paginas, veio ${semFiltro.length}: ${semFiltro.join(', ')}`);
+  assert.equal(semFiltro.length, 1, `esperava 1 pagina, veio ${semFiltro.length}: ${semFiltro.join(', ')}`);
 });
 
-check('aplicou o periodo de 2 anos', () => {
+await check('aplicou o periodo de 2 anos', () => {
   assert.deepEqual(avisos, [], `avisos: ${avisos.join('; ')}`);
 });
 
-check('varreu cada opcao do filtro, uma por uma', () => {
+await check('varreu cada opcao do filtro, uma por uma', () => {
   for (const status of STATUS) {
     const doStatus = rotulos.filter((r) => r.startsWith(`filtro: ${status}`));
-    const esperado = Math.ceil(QUANTIDADE[status] / 10);
+    const esperado = Math.ceil(QUANTIDADE[status] / 50);
     assert.equal(doStatus.length, esperado, `${status}: esperava ${esperado} pagina(s), veio ${doStatus.length}`);
   }
 });
 
-check('leu as 36 guias, inclusive as canceladas', () => {
-  const primeiraPagina = paginas.find((p) => p.url === 'sem filtro — pagina 1').content;
-  assert.match(primeiraPagina, /PACIENTE AGUARDANDO 1/);
-  // a ultima guia so aparece na pagina 4
-  const ultimaPagina = paginas.find((p) => p.url === 'sem filtro — pagina 4').content;
-  assert.match(ultimaPagina, /Cancelada/);
+await check('leu as 36 guias, inclusive as canceladas', () => {
+  const semFiltro = paginas.find((p) => p.url === 'sem filtro — pagina 1');
+  assert.equal(semFiltro.casos.length, 36, `leu ${semFiltro.casos.length} caso(s)`);
+  assert.match(semFiltro.content, /PACIENTE AGUARDANDO 1/);
+  assert.match(semFiltro.content, /Cancelada/, 'faltaram as canceladas');
   assert.match(texto, /PACIENTE EM 14/, 'faltou a ultima guia de Em Processamento');
+
+  // nenhuma guia repetida entre as varreduras (sem filtro + por status)
+  const guias = paginas.flatMap((p) => (p.casos || []).map((caso) => caso.guia));
+  assert.equal(new Set(guias).size, 36, `${guias.length} leituras, ${new Set(guias).size} guias distintas`);
 });
 
 const valorPeriodo = await page.locator('#periodo').inputValue();
-check('o campo de periodo ficou com os 2 anos', () => {
+await check('o campo de periodo ficou com os 2 anos', () => {
   assert.equal(valorPeriodo, periodoDesejado(2));
 });
 
@@ -199,11 +215,11 @@ const { caseKey } = await import('../src/diff.js');
 await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
 const { casos: casosTabela } = await casosDaPagina(page);
 
-check('le as 10 linhas da tabela direto do DOM', () => {
+await check('le as 10 linhas da tabela direto do DOM', () => {
   assert.equal(casosTabela.length, 10, `leu ${casosTabela.length}`);
 });
 
-check('casa cada coluna pelo cabecalho', () => {
+await check('casa cada coluna pelo cabecalho', () => {
   const primeiro = casosTabela[0];
   assert.match(primeiro.guia, /^\d{10}$/, `guia: ${primeiro.guia}`);
   assert.equal(primeiro.status, 'Aguardando Pagamento');
@@ -213,7 +229,7 @@ check('casa cada coluna pelo cabecalho', () => {
   assert.equal(typeof primeiro.valorBruto, 'number');
 });
 
-check('a chave unica usa o CPSA, nao a composicao', () => {
+await check('a chave unica usa o CPSA, nao a composicao', () => {
   const chave = caseKey(casosTabela[0]);
   assert.equal(chave, `g${casosTabela[0].guia}`);
   // mesmo caso com nome corrigido continua sendo o mesmo registro
@@ -221,9 +237,24 @@ check('a chave unica usa o CPSA, nao a composicao', () => {
   assert.equal(caseKey(corrigido), chave);
 });
 
-check('tabela com cabecalho irreconhecivel nao vira caso', () => {
+await check('tabela com cabecalho irreconhecivel nao vira caso', () => {
   const lixo = { titulos: ['Coluna A', 'Coluna B'], linhas: [{ valores: ['x', 'y'], href: '' }] };
   assert.equal(linhasParaCasos(lixo), null);
+});
+
+// --- Tailwind: "disabled:opacity-75" nao e estado desabilitado ---
+const { aumentarPorPagina } = await import('../src/sweep.js');
+
+await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
+const escolhido = await aumentarPorPagina(page, 'por página', () => {});
+
+await check('aumenta itens por pagina para o maior valor do select', () => {
+  assert.equal(escolhido, 50, `escolheu ${escolhido}`);
+});
+
+await check('com 50 por pagina as 36 guias cabem numa pagina so', async () => {
+  const linhas = await page.locator('#corpo tr').count();
+  assert.equal(linhas, 36, `mostrou ${linhas} linha(s)`);
 });
 
 // --- paginacao ---
@@ -233,12 +264,12 @@ const comum = { rotuloResultados: 'Mostrando', maxPaginas: 40, esperaMs: 120, lo
 await page.goto(`http://127.0.0.1:${porta}/`, { waitUntil: 'domcontentloaded' });
 const percurso = await percorrerPaginas(page, { ...comum, label: 'percurso' });
 
-check('percorre ate a ultima pagina e marca como completa', () => {
+await check('percorre ate a ultima pagina e marca como completa', () => {
   assert.equal(percurso.paginasVisitadas, 4, `visitou ${percurso.paginasVisitadas}`);
   assert.equal(percurso.completou, true, `motivo: ${percurso.motivoParada}`);
 });
 
-check('cada pagina tem conteudo distinto', () => {
+await check('cada pagina tem conteudo distinto', () => {
   const assinaturas = new Set(percurso.paginas.map((p) => p.content));
   assert.equal(assinaturas.size, 4, 'houve pagina repetida');
 });
@@ -251,7 +282,7 @@ await page.evaluate(() => {
 });
 const travado = await percorrerPaginas(page, { ...comum, label: 'travado' });
 
-check('paginacao travada nao e reportada como completa', () => {
+await check('paginacao travada nao e reportada como completa', () => {
   assert.equal(travado.completou, false);
   assert.ok(travado.motivoParada, 'deveria dizer por que parou');
   assert.ok(travado.paginasVisitadas < 4, `visitou ${travado.paginasVisitadas}, deveria ter parado antes`);

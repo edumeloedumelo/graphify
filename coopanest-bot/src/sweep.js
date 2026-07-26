@@ -157,25 +157,45 @@ export async function aplicarPeriodo(page, anos, log = () => {}) {
 export async function aumentarPorPagina(page, rotulo, log = () => {}) {
   const escolhido = await page.evaluate((termo) => {
     const alvo = String(termo).toLowerCase();
-    for (const select of document.querySelectorAll('select')) {
-      const contexto = `${select.closest('div')?.innerText || ''} ${select.getAttribute('aria-label') || ''}`;
-      if (!contexto.toLowerCase().includes(alvo)) continue;
+    const selects = [...document.querySelectorAll('select')];
 
-      const numericas = [...select.options]
+    const numericas = (select) =>
+      [...select.options]
         .map((opcao) => ({ opcao, valor: parseInt(opcao.text, 10) }))
         .filter((item) => Number.isFinite(item.valor));
-      if (numericas.length === 0) continue;
 
-      const maior = numericas.sort((a, b) => b.valor - a.valor)[0];
-      select.value = maior.opcao.value;
+    // 1) select cujo rotulo por perto fala em "por pagina"
+    // 2) senao, qualquer select cujas opcoes sejam TODAS numericas — no portal
+    //    esse e o "Guias por pagina: 5 10 20 30 50", e o rotulo fica fora do
+    //    elemento pai, entao procurar pelo texto sozinho nao acha
+    const candidatos = selects.filter((select) => {
+      const contexto = `${select.closest('div')?.innerText || ''} ${select.getAttribute('aria-label') || ''}`;
+      return contexto.toLowerCase().includes(alvo);
+    });
+    const soNumericos = selects.filter(
+      (select) => select.options.length > 1 && numericas(select).length === select.options.length,
+    );
+
+    for (const select of [...candidatos, ...soNumericos]) {
+      const opcoes = numericas(select);
+      if (opcoes.length === 0) continue;
+
+      const maior = opcoes.sort((a, b) => b.valor - a.valor)[0];
+      if (String(select.value) === String(maior.opcao.value)) return maior.valor;
+
+      // React controlado: setar .value nao dispara o onChange do framework
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+      if (setter) setter.call(select, maior.opcao.value);
+      else select.value = maior.opcao.value;
       select.dispatchEvent(new Event('change', { bubbles: true }));
+      select.dispatchEvent(new Event('input', { bubbles: true }));
       return maior.valor;
     }
     return 0;
   }, rotulo);
 
   if (escolhido) {
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
     log(`itens por pagina: ${escolhido}`);
   }
   return escolhido;
@@ -242,14 +262,15 @@ async function assinaturaLinhas(page) {
 async function proximoControle(page) {
   const achou = await page.evaluate(() => {
     const visivel = (element) => element && element.offsetParent !== null;
+    // Tailwind usa "disabled:" como prefixo de variante ("disabled:opacity-75"),
+    // entao procurar a palavra solta marcava TODO botao como desabilitado.
+    // So conta: a propriedade do DOM, aria-disabled, ou a classe exata "disabled".
     const desabilitado = (element) => {
-      const classe = typeof element.className === 'string' ? element.className : '';
-      return (
-        element.hasAttribute('disabled') ||
-        element.getAttribute('aria-disabled') === 'true' ||
-        /\bdisabled\b/i.test(classe) ||
-        Boolean(element.closest('.disabled, [aria-disabled="true"]'))
-      );
+      if (element.disabled === true) return true;
+      if (element.getAttribute('aria-disabled') === 'true') return true;
+      const classes = (typeof element.className === 'string' ? element.className : '').split(/\s+/);
+      if (classes.includes('disabled')) return true;
+      return Boolean(element.closest('[disabled], [aria-disabled="true"]'));
     };
 
     const candidatos = [

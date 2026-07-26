@@ -90,9 +90,9 @@ export async function inspectPage(page) {
         descricao: descrever(element),
         texto: texto(element).slice(0, 20),
         desabilitado:
-          element.hasAttribute('disabled') ||
+          element.disabled === true ||
           element.getAttribute('aria-disabled') === 'true' ||
-          /disabled/i.test(typeof element.className === 'string' ? element.className : ''),
+          (typeof element.className === 'string' ? element.className : '').split(/\s+/).includes('disabled'),
       }))
       .slice(0, 20);
 
